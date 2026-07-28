@@ -238,3 +238,21 @@ func TestIndexRefusesWhileServiceRunning(t *testing.T) {
 		t.Error("被拒绝的 index 仍然动了索引库")
 	}
 }
+
+// 整套路由必须能装到同一个 mux 上。
+// Go 1.22 的 ServeMux 在注册期就会对冲突模式 panic（"GET /" 撞 "/mcp/" 即是），
+// 这类错误编译不出来、只在启动瞬间炸——所以要有一条测试真的把服务起起来。
+func TestMCPEndpointCoexistsWithDashboard(t *testing.T) {
+	uiPort, apiPort, _ := startServe(t)
+
+	// MCP 端点在 API 口，且不被 dashboard 的根兜底抢走
+	code, _ := get(t, fmt.Sprintf("http://127.0.0.1:%d/mcp", apiPort))
+	if code == 404 {
+		t.Error("/mcp 落到了静态文件服务器上（404）")
+	}
+	// dashboard 仍在前端口正常出页面
+	code, body := get(t, fmt.Sprintf("http://127.0.0.1:%d/", uiPort))
+	if code != 200 || !strings.Contains(body, "chatdex") {
+		t.Errorf("dashboard 受影响 code=%d", code)
+	}
+}

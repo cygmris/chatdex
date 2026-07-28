@@ -12,6 +12,7 @@ import (
 	"github.com/cygmris/chatdex/internal/dashboard"
 	"github.com/cygmris/chatdex/internal/httpapi"
 	"github.com/cygmris/chatdex/internal/index"
+	"github.com/cygmris/chatdex/internal/mcpserver"
 	"github.com/cygmris/chatdex/internal/search"
 )
 
@@ -56,6 +57,7 @@ func runServe(args []string) error {
 	// 两个 listener 共用同一个 mux：页面与 API 同源，无需 CORS
 	mux := http.NewServeMux()
 	api.Register(mux)
+	mcpserver.Register(mux, engine)
 	dashboard.Register(mux)
 
 	go scanLoop(sc, cfg.Scan.IntervalSec)
