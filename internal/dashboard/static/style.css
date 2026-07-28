@@ -56,6 +56,8 @@ button:hover { border-color: var(--accent); }
   margin: 10px 0 16px;
 }
 .filters input, .filters select { font-size: 13px; }
+.filters select#project { max-width: 300px; }
+.filters input[type=date] { width: 140px; }
 
 /* ---- 结果 ---- */
 

@@ -103,7 +103,7 @@ function renderResults(res, offset) {
       <p class="snippet">${escHit(s.snippet)}</p>
       <div class="hit-foot">
         <span>${s.msg_count} 条消息</span>
-        <span>命中 ${s.hits} 处</span>
+        ${s.hits ? `<span>命中 ${s.hits} 处</span>` : ''}
         ${s.best_kind ? `<span>最佳命中：${esc(KIND_LABEL[s.best_kind] || s.best_kind)}${s.best_tool ? '·' + esc(s.best_tool) : ''}</span>` : ''}
       </div>
     </article>`).join('');

@@ -235,13 +235,14 @@ LIMIT 1`, append([]any{match, h.ID}, args...)...)
 }
 
 // recentSessions 处理「只有过滤条件、没有关键词」的情形（时间线与初始视图会用到）。
+// 这时不存在「命中」，Hits 保持 0——拿消息数冒充命中数会让人误以为整个会话都被匹配了。
 func (e *Engine) recentSessions(q Query) (Result, error) {
 	where, args := q.filters()
 	limit, offset := q.limit()
 
 	rows, err := e.db.Query(`
 SELECT s.id, s.source, s.session_uid, s.agent_label, s.file_path, s.project_path,
-       s.started_at, s.ended_at, s.msg_count, COALESCE(s.summary, ''), COUNT(b.id)
+       s.started_at, s.ended_at, s.msg_count, COALESCE(s.summary, '')
 FROM sessions s
 JOIN blocks b ON b.session_id = s.id
 WHERE s.alive = 1`+where+`
@@ -257,7 +258,7 @@ LIMIT ? OFFSET ?`, append(args, limit, offset)...)
 	for rows.Next() {
 		var h SessionHit
 		if err := rows.Scan(&h.ID, &h.Source, &h.SessionUID, &h.AgentLabel, &h.FilePath,
-			&h.ProjectPath, &h.StartedAt, &h.EndedAt, &h.MsgCount, &h.Summary, &h.Hits); err != nil {
+			&h.ProjectPath, &h.StartedAt, &h.EndedAt, &h.MsgCount, &h.Summary); err != nil {
 			return Result{}, err
 		}
 		res.Sessions = append(res.Sessions, h)
