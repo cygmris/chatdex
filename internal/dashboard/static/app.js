@@ -157,17 +157,130 @@ async function loadTimeline() {
 
 function switchView(next) {
   view = next;
-  const isSearch = view === 'search';
-  $('tab-search').classList.toggle('active', isSearch);
-  $('tab-timeline').classList.toggle('active', !isSearch);
-  $('search-form').hidden = !isSearch;
-  $('results').hidden = !isSearch;
-  $('timeline').hidden = isSearch;
-  if (isSearch) doSearch(0); else loadTimeline();
+  for (const [id, v] of [['tab-search', 'search'], ['tab-timeline', 'timeline'], ['tab-chat', 'chat']]) {
+    $(id).classList.toggle('active', view === v);
+  }
+  $('search-form').hidden = view !== 'search';
+  $('results').hidden = view !== 'search';
+  $('timeline').hidden = view !== 'timeline';
+  $('chat').hidden = view !== 'chat';
+  // 过滤条只对检索与时间线有意义
+  document.querySelector('.filters').hidden = view === 'chat';
+  refreshCurrentView();
 }
 
 function refreshCurrentView() {
-  if (view === 'search') doSearch(0); else loadTimeline();
+  if (view === 'search') doSearch(0);
+  else if (view === 'timeline') loadTimeline();
+}
+
+// ---------- 聊天助手 ----------
+//
+// 需求 10.7：必须展示 LLM 实际执行了哪些检索——不展示的话，
+// 用户无从判断它是搜错了方向，还是确实没有。
+
+let chatReady = false;
+
+async function loadChatStatus() {
+  try {
+    const s = await api('/api/chat/status');
+    chatReady = !!s.available;
+    $('chat-form').hidden = !chatReady;
+    $('chat-unavailable').hidden = chatReady;
+    $('tab-chat').classList.toggle('disabled', !chatReady);
+    if (!chatReady) {
+      $('chat-unavailable').textContent =
+        `聊天不可用：${s.reason || '本地 LLM 未就绪'}。检索与时间线不受影响。`;
+    }
+  } catch {
+    chatReady = false;
+    $('chat-form').hidden = true;
+    $('chat-unavailable').hidden = false;
+    $('chat-unavailable').textContent = '聊天状态未知（服务未响应）。';
+  }
+}
+
+const TOOL_LABEL = {
+  search_sessions: '检索', get_session: '读会话', list_projects: '看项目列表',
+};
+
+function describeArgs(a = {}) {
+  const parts = [];
+  if (a.query) parts.push(`「${a.query}」`);
+  if (a.kind) parts.push(`类型=${a.kind}`);
+  if (a.tool_name) parts.push(`工具=${a.tool_name}`);
+  if (a.source) parts.push(`来源=${a.source}`);
+  if (a.project) parts.push(`项目=${a.project}`);
+  if (a.session_id) parts.push(`会话 #${a.session_id}`);
+  if (a.from_seq) parts.push(`从第 ${a.from_seq} 条`);
+  return parts.join(' · ');
+}
+
+// 答案里出现的「会话 12」「#12」都变成可点的链接
+function linkifySessions(text) {
+  // 模型的写法五花八门：「会话 12」「会话 id: 12」「会话 ID：12」「#12」都要能点
+  return esc(text).replace(/(?:会话\s*(?:id)?\s*[:：]?\s*#?|#)(\d+)/gi,
+    (m, id) => `<a href="#" class="sess-link" data-id="${id}">${m}</a>`);
+}
+
+async function askChat(question) {
+  const log = $('chat-log');
+  const turn = document.createElement('div');
+  turn.className = 'turn';
+  turn.innerHTML = `<div class="q">${esc(question)}</div><div class="steps"></div><div class="a"></div>`;
+  log.prepend(turn);
+  const steps = turn.querySelector('.steps');
+  const answer = turn.querySelector('.a');
+
+  const resp = await fetch('/api/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ question }),
+  });
+  if (!resp.ok) {
+    answer.innerHTML = `<span class="err">${esc(await resp.text())}</span>`;
+    return;
+  }
+
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  let lastStep = null;
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    const chunks = buf.split('\n\n');
+    buf = chunks.pop();
+    for (const c of chunks) {
+      const line = c.split('\n').find((l) => l.startsWith('data: '));
+      if (!line) continue;
+      let e;
+      try { e = JSON.parse(line.slice(6)); } catch { continue; }
+
+      if (e.type === 'tool') {
+        lastStep = document.createElement('div');
+        lastStep.className = 'step';
+        lastStep.innerHTML =
+          `<span class="round">第 ${e.round} 轮</span> ${esc(TOOL_LABEL[e.tool] || e.tool)} ` +
+          `<span class="args">${esc(describeArgs(e.args))}</span> <span class="hits">…</span>`;
+        steps.append(lastStep);
+      } else if (e.type === 'tool_result' && lastStep) {
+        lastStep.querySelector('.hits').textContent =
+          e.hits ? `→ ${e.hits} 条` : '→ 无命中';
+      } else if (e.type === 'note') {
+        const n = document.createElement('div');
+        n.className = 'step note';
+        n.textContent = e.text;
+        steps.append(n);
+      } else if (e.type === 'answer') {
+        answer.innerHTML = linkifySessions(e.text || '（无内容）');
+        answer.querySelectorAll('.sess-link').forEach((el) =>
+          el.onclick = (ev) => { ev.preventDefault(); openSession(+el.dataset.id, 0); });
+      }
+    }
+  }
 }
 
 // ---------- 会话回读 ----------
@@ -284,6 +397,16 @@ $('search-form').onsubmit = (e) => { e.preventDefault(); doSearch(0); };
   $(id).onchange = () => refreshCurrentView());
 $('tab-search').onclick = () => switchView('search');
 $('tab-timeline').onclick = () => switchView('timeline');
+$('tab-chat').onclick = () => switchView('chat');
+$('chat-form').onsubmit = async (e) => {
+  e.preventDefault();
+  const q = $('chat-q').value.trim();
+  if (!q) return;
+  $('chat-q').value = '';
+  $('chat-send').disabled = true;
+  try { await askChat(q); } finally { $('chat-send').disabled = false; }
+};
+loadChatStatus();
 $('timeline').hidden = true;
 $('back').onclick = () => {
   $('session-pane').hidden = true;

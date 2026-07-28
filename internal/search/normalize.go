@@ -61,6 +61,14 @@ func NormalizeIndex(s string) string { return split(s, Sep) }
 // 查询串不进入存储，用空格分隔即可——与 Sep 经 unicode61 分词后完全等价。
 func NormalizeQuery(s string) string { return split(s, ' ') }
 
+// StripAll 去掉全部内部标记（CJK 分隔符 + 命中高亮哨兵），得到纯文本。
+//
+// 给 MCP 与聊天 agent 用：它们要的是能直接读的文本，不是带高亮标记的片段。
+// 实测本地模型会把 \x02 \x03 原样抄进答案里给用户看。
+func StripAll(s string) string {
+	return strings.NewReplacer(string(Sep), "", HitOpen, "", HitClose, "").Replace(s)
+}
+
 // Strip 去掉 Sep，还原可展示的原文。
 func Strip(s string) string {
 	if !strings.ContainsRune(s, Sep) {

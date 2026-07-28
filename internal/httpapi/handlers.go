@@ -97,7 +97,12 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	out := statsResponse{Stats: st, LLMReady: s.Summary != nil}
+	// llm_ready 要如实反映「此刻能不能用」，不是「配置是否合法」——
+	// 前端拿它决定摘要进度条怎么显示，报个乐观值只会误导。
+	out := statsResponse{Stats: st}
+	if s.Chat != nil {
+		out.LLMReady = s.Chat.Available(r.Context())
+	}
 	if p, err := s.Store.SummaryProgress(); err == nil {
 		out.Summary = p
 	}

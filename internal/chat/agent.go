@@ -46,6 +46,12 @@ type Agent struct {
 	MaxRounds int
 }
 
+// Available 探测本地 LLM 此刻是否就绪。
+//
+// 端点配得对不等于服务起着——Ollama 随时可能没跑。需求 10.6 要的是
+// 「入口置灰并说明原因」，所以状态查询必须真去探一下，而不是只看配置。
+func (a *Agent) Available(ctx context.Context) bool { return a.LLM.Available(ctx) }
+
 // Ask 回答一个问题，过程中的每一步通过 emit 推出去。
 func (a *Agent) Ask(ctx context.Context, question string, emit func(Event)) error {
 	rounds := a.MaxRounds

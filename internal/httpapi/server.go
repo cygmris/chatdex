@@ -5,8 +5,11 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+
+	"github.com/cygmris/chatdex/internal/chat"
 
 	"github.com/cygmris/chatdex/internal/index"
 	"github.com/cygmris/chatdex/internal/search"
@@ -20,12 +23,21 @@ type Summarizer interface {
 	Paused() bool
 }
 
+// Chatter 是聊天助手的最小接口。为 nil 表示本地 LLM 不可用，入口置灰。
+type Chatter interface {
+	Available(ctx context.Context) bool
+	Ask(ctx context.Context, question string, emit func(chat.Event)) error
+}
+
 // Server 持有各端共用的依赖。
 type Server struct {
 	Engine *search.Engine
 	Store  *index.Store
-	// Summary 可为 nil（本地 LLM 不可用时不启动摘要任务）。
+	// Summary / Chat 可为 nil（本地 LLM 不可用时不启用，功能降级而非报错）。
 	Summary Summarizer
+	Chat    Chatter
+	// ChatUnavailableReason 在 Chat 为 nil 时说明原因，前端要显示给用户。
+	ChatUnavailableReason string
 }
 
 // Register 把 API 路由挂到 mux 上。
@@ -40,6 +52,8 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/stats", s.handleStats)
 	mux.HandleFunc("POST /api/summary/pause", s.handleSummaryPause)
 	mux.HandleFunc("POST /api/summary/resume", s.handleSummaryResume)
+	mux.HandleFunc("GET /api/chat/status", s.handleChatStatus)
+	mux.HandleFunc("POST /api/chat", s.handleChat)
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

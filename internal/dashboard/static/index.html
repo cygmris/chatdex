@@ -17,6 +17,7 @@
   <nav class="tabs">
     <button id="tab-search" class="tab active">检索</button>
     <button id="tab-timeline" class="tab">时间线</button>
+    <button id="tab-chat" class="tab">问一问</button>
   </nav>
 
   <section id="search-pane">
@@ -47,6 +48,15 @@
 
     <div id="results"></div>
     <div id="timeline"></div>
+
+    <div id="chat" hidden>
+      <p id="chat-unavailable" class="hint" hidden></p>
+      <form id="chat-form">
+        <input id="chat-q" type="text" placeholder="用大白话问，如：我记得做过一个增量备份的项目，在哪个会话？">
+        <button type="submit" id="chat-send">问</button>
+      </form>
+      <div id="chat-log"></div>
+    </div>
   </section>
 
   <section id="session-pane" hidden>

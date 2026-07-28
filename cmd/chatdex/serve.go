@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/cygmris/chatdex/internal/chat"
 	"github.com/cygmris/chatdex/internal/config"
 	"github.com/cygmris/chatdex/internal/dashboard"
 	"github.com/cygmris/chatdex/internal/httpapi"
@@ -57,11 +58,23 @@ func runServe(args []string) error {
 	engine := search.NewEngine(st.DB())
 	api := &httpapi.Server{Engine: engine, Store: st}
 
-	// 摘要是可选能力：本地 LLM 配不上或没起来，索引与检索照常，只是没有摘要。
+	// LLM 是可选依赖：配不上或没起来，索引与检索照常，只是没有摘要、聊天置灰。
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	if w := startSummary(ctx, cfg, st, engine); w != nil {
-		api.Summary = w
+	client, llmErr := llm.NewOllama(cfg.LLM.Endpoint)
+	if llmErr != nil {
+		// 端点非回环会走到这里：服务照常起，只是没有 LLM 功能
+		slog.Warn("LLM 端点不可用，摘要与聊天功能关闭", "err", llmErr)
+		api.ChatUnavailableReason = llmErr.Error()
+	} else {
+		api.Chat = &chat.Agent{
+			LLM: client, Model: cfg.Chat.Model,
+			Tools:     &mcpserver.Tools{Engine: engine},
+			MaxRounds: cfg.Chat.MaxToolRounds,
+		}
+		if w := startSummary(ctx, cfg, st, engine, client); w != nil {
+			api.Summary = w
+		}
 	}
 
 	// 两个 listener 共用同一个 mux：页面与 API 同源，无需 CORS
@@ -89,16 +102,10 @@ func listen(port int) (net.Listener, error) {
 	return net.Listen("tcp", fmt.Sprintf("%s:%d", loopback, port))
 }
 
-// startSummary 起摘要后台任务；LLM 端点非法或不可用时返回 nil（功能降级，不是错误）。
-func startSummary(ctx context.Context, cfg config.Config, st *index.Store, engine *search.Engine) *summary.Worker {
+// startSummary 起摘要后台任务；配置里关掉则返回 nil。
+func startSummary(ctx context.Context, cfg config.Config, st *index.Store, engine *search.Engine, client llm.Client) *summary.Worker {
 	if !cfg.Summary.Enabled {
 		slog.Info("摘要任务已在配置中关闭")
-		return nil
-	}
-	client, err := llm.NewOllama(cfg.LLM.Endpoint)
-	if err != nil {
-		// 端点非回环会走到这里：服务照常起，只是没有 LLM 功能
-		slog.Warn("LLM 端点不可用，摘要与聊天功能关闭", "err", err)
 		return nil
 	}
 	w := &summary.Worker{

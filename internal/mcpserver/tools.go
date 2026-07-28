@@ -80,7 +80,7 @@ func (t *Tools) SearchSessions(a SearchArgs) (SearchOutput, error) {
 			SessionID: s.ID, Source: s.Source, ProjectPath: s.ProjectPath, FilePath: s.FilePath,
 			StartedAt: s.StartedAt, EndedAt: s.EndedAt, MsgCount: s.MsgCount, Summary: s.Summary,
 			Hits: s.Hits, BestSeq: s.BestSeq, BestKind: s.BestKind, BestTool: s.BestTool,
-			Snippet: clip(s.Snippet, snippetChars),
+			Snippet: clip(search.StripAll(s.Snippet), snippetChars),
 		})
 	}
 	if res.NoMatch {
@@ -133,7 +133,7 @@ func (t *Tools) GetSession(a GetSessionArgs) (SessionOutput, error) {
 	budget := sessionBudget
 	var notes []string
 	for _, m := range v.Messages {
-		body := clip(m.Body, maxBodyChars)
+		body := clip(search.StripAll(m.Body), maxBodyChars)
 		if len(body) > budget {
 			notes = append(notes, "已达单次返回上限，后续消息未包含——用 from_seq 继续读")
 			break

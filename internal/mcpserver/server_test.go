@@ -189,3 +189,30 @@ func TestListProjects(t *testing.T) {
 		t.Errorf("项目列表 = %+v", out.Projects)
 	}
 }
+
+// 给 agent 的文本必须是纯文本：高亮哨兵是 dashboard 的渲染细节，
+// 实测本地模型会把 \x02 \x03 原样抄进答案里给用户看。
+func TestAgentFacingTextHasNoControlMarkers(t *testing.T) {
+	engine, id := newFixture(t)
+	sess := connect(t, engine)
+
+	hasCtrl := func(s string) bool {
+		return strings.ContainsAny(s, "\x01\x02\x03")
+	}
+
+	var out mcpserver.SearchOutput
+	callJSON(t, sess, "search_sessions", mcpserver.SearchArgs{Query: "增量备份"}, &out)
+	for _, s := range out.Sessions {
+		if hasCtrl(s.Snippet) {
+			t.Errorf("片段含内部控制标记: %q", s.Snippet)
+		}
+	}
+
+	var v mcpserver.SessionOutput
+	callJSON(t, sess, "get_session", mcpserver.GetSessionArgs{SessionID: id}, &v)
+	for _, m := range v.Messages {
+		if hasCtrl(m.Body) {
+			t.Errorf("消息正文含内部控制标记: %q", m.Body[:min(60, len(m.Body))])
+		}
+	}
+}
