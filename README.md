@@ -20,14 +20,24 @@
 
 ## 状态
 
-🔵 需求已定稿（`session-search`），design / tasks 待做。见 `docs/BACKLOG.md`。
+🟢 **里程碑 A 已达成：关键词检索可日常使用**（任务 1–12 / 22）。
+
+```bash
+systemctl --user start chatdex   # 部署见 docs/deploy.md
+xdg-open http://127.0.0.1:5021
+```
+
+实测（本机全量）：3176 个会话 · 632 322 个内容块 · 索引库 1.0 GB · 全量索引 13 分钟。
+
+后续：MCP 端点 → 会话摘要 → 时间线 → LLM 聊天。进度见
+`.spec-workflow/specs/session-search/tasks.md`。
 
 ## 开发方式
 
 specloop 驱动。规范在 `.spec-workflow/specs/session-search/`，审批模式 `auto-with-log`。
 
 ```
-Requirements ✅ → Design → Tasks → Implementation
+Requirements ✅ → Design ✅ → Tasks ✅ → Implementation ⏳
 ```
 
 ## ⚠️ 核心前置知识：两套 JSONL 格式不同
