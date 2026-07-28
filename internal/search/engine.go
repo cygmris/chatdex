@@ -27,9 +27,11 @@ const (
 // 一旦与 blocks/sessions 同处一个 SELECT（哪怕写成子查询被优化器展平），
 // SQLite 就会报 "unable to use function bm25 in the requested context"。
 // `AS MATERIALIZED` 是关键：它阻止优化器把 CTE 展平回外层。
-const ftsScoreCTE = `SELECT rowid AS bid,
-       bm25(blocks_fts) AS score,
-       snippet(blocks_fts, 0, char(2), char(3), '…', ` + snippetTokensStr + `) AS snip
+// ⚠️ 这里**只算 bm25，绝不算 snippet**。snippet() 要把正文从外部内容表取回来
+// 重新分词，代价与「全库命中数」成正比：实测查「的」（单个 CJK 字即一个 token，
+// 命中 92864 块）时，带 snippet 的一趟要 2.8 秒，不带只要 99 毫秒。
+// 片段只对**最终要展示的那几行**按 rowid 单独取（见 snippetFor），代价与命中总数无关。
+const ftsScoreCTE = `SELECT rowid AS bid, bm25(blocks_fts) AS score
 FROM blocks_fts WHERE blocks_fts MATCH ?`
 
 // Engine 是全项目**唯一**的检索实现：dashboard、MCP 端点与聊天 agent
@@ -174,7 +176,7 @@ func (e *Engine) SearchSessions(q Query) (Result, error) {
 WITH f AS MATERIALIZED (`+ftsScoreCTE+`)
 SELECT s.id, s.source, s.session_uid, s.agent_label, s.file_path, s.project_path,
        s.started_at, s.ended_at, s.msg_count, COALESCE(s.summary, ''),
-       MIN(f.score) AS score, COUNT(*) AS hits
+       MIN(f.score) AS score, f.bid AS best_bid, COUNT(*) AS hits
 FROM f
 JOIN blocks   b ON b.id = f.bid
 JOIN sessions s ON s.id = b.session_id
@@ -188,21 +190,26 @@ LIMIT ? OFFSET ?`, append(append([]any{match}, args...), limit, offset)...)
 	defer rows.Close()
 
 	res := Result{Query: q}
+	var bestIDs []int64
 	for rows.Next() {
 		var h SessionHit
+		var bid int64
+		// MIN() 的裸列取自产生该最小值的那一行——SQLite 对 min()/max() 有此保证，
+		// 于是 best_bid 就是该会话最相关的那个块。
 		if err := rows.Scan(&h.ID, &h.Source, &h.SessionUID, &h.AgentLabel, &h.FilePath,
 			&h.ProjectPath, &h.StartedAt, &h.EndedAt, &h.MsgCount, &h.Summary,
-			&h.Score, &h.Hits); err != nil {
+			&h.Score, &bid, &h.Hits); err != nil {
 			return Result{}, err
 		}
 		res.Sessions = append(res.Sessions, h)
+		bestIDs = append(bestIDs, bid)
 	}
 	if err := rows.Err(); err != nil {
 		return Result{}, err
 	}
 
 	for i := range res.Sessions {
-		if err := e.fillBest(&res.Sessions[i], match, q); err != nil {
+		if err := e.fillBest(&res.Sessions[i], bestIDs[i], match); err != nil {
 			return Result{}, err
 		}
 	}
@@ -210,24 +217,21 @@ LIMIT ? OFFSET ?`, append(append([]any{match}, args...), limit, offset)...)
 	return res, nil
 }
 
-// fillBest 取该会话最相关的那一块，用作展示片段与跳转锚点。
-func (e *Engine) fillBest(h *SessionHit, match string, q Query) error {
-	where, args := q.filters()
-	row := e.db.QueryRow(`
-WITH f AS MATERIALIZED (`+ftsScoreCTE+`)
-SELECT b.seq, b.kind, b.tool_name, f.snip
-FROM f
-JOIN blocks   b ON b.id = f.bid
-JOIN sessions s ON s.id = b.session_id
-WHERE s.id = ?`+where+`
-ORDER BY f.score ASC
-LIMIT 1`, append([]any{match, h.ID}, args...)...)
-
+// fillBest 补上该会话最佳块的位置与高亮片段。
+//
+// 按 rowid 定位单块，代价与全库命中数无关——这正是把 snippet 挪出宽查询的意义。
+func (e *Engine) fillBest(h *SessionHit, bid int64, match string) error {
 	var snip string
-	if err := row.Scan(&h.BestSeq, &h.BestKind, &h.BestTool, &snip); err != nil {
-		if err == sql.ErrNoRows {
-			return nil
-		}
+	err := e.db.QueryRow(`
+SELECT b.seq, b.kind, b.tool_name,
+       (SELECT snippet(blocks_fts, 0, char(2), char(3), '…', `+snippetTokensStr+`)
+        FROM blocks_fts WHERE blocks_fts MATCH ? AND rowid = b.id)
+FROM blocks b WHERE b.id = ?`, match, bid).
+		Scan(&h.BestSeq, &h.BestKind, &h.BestTool, &snip)
+	if err == sql.ErrNoRows {
+		return nil
+	}
+	if err != nil {
 		return err
 	}
 	h.Snippet = Strip(snip) // 去掉 CJK 分隔标记后才可直接展示
@@ -277,8 +281,8 @@ func (e *Engine) SearchBlocks(q Query) ([]BlockHit, error) {
 
 	rows, err := e.db.Query(`
 WITH f AS MATERIALIZED (`+ftsScoreCTE+`)
-SELECT b.session_id, b.seq, b.ts, b.kind, b.tool_name, b.tool_use_id, b.truncated,
-       f.score, f.snip
+SELECT b.id, b.session_id, b.seq, b.ts, b.kind, b.tool_name, b.tool_use_id, b.truncated,
+       f.score
 FROM f
 JOIN blocks   b ON b.id = f.bid
 JOIN sessions s ON s.id = b.session_id
@@ -291,17 +295,40 @@ LIMIT ? OFFSET ?`, append(append([]any{match}, args...), limit, offset)...)
 	defer rows.Close()
 
 	var out []BlockHit
+	var ids []int64
 	for rows.Next() {
 		var h BlockHit
-		var snip string
-		if err := rows.Scan(&h.SessionID, &h.Seq, &h.TS, &h.Kind, &h.ToolName,
-			&h.ToolUseID, &h.Truncated, &h.Score, &snip); err != nil {
+		var id int64
+		if err := rows.Scan(&id, &h.SessionID, &h.Seq, &h.TS, &h.Kind, &h.ToolName,
+			&h.ToolUseID, &h.Truncated, &h.Score); err != nil {
 			return nil, err
 		}
-		h.Snippet = Strip(snip)
 		out = append(out, h)
+		ids = append(ids, id)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// 片段只对本页这几行按 rowid 取
+	for i := range out {
+		snip, err := e.snippetFor(ids[i], match)
+		if err != nil {
+			return nil, err
+		}
+		out[i].Snippet = snip
+	}
+	return out, nil
+}
+
+// snippetFor 取单个块的高亮片段。
+func (e *Engine) snippetFor(bid int64, match string) (string, error) {
+	var snip string
+	err := e.db.QueryRow(`SELECT snippet(blocks_fts, 0, char(2), char(3), '…', `+snippetTokensStr+`)
+FROM blocks_fts WHERE blocks_fts MATCH ? AND rowid = ?`, match, bid).Scan(&snip)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return Strip(snip), err
 }
 
 // Message 是回读视图里的一条消息。

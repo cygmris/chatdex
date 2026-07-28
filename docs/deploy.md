@@ -47,7 +47,7 @@ N 是个位数而不是三千多）。
 systemctl --user {start,stop,restart,status} chatdex
 journalctl --user -u chatdex -f            # 跟日志
 chatdex status                             # 只读打印索引统计
-chatdex index                              # 手动跑一轮索引（服务在跑时一般不需要）
+chatdex index                              # 手动跑一轮索引（服务在跑时会被拒绝，见下）
 ```
 
 崩溃自动拉起：unit 配了 `Restart=always` / `RestartSec=2`，`kill -9` 后约 2 秒起新进程。
@@ -96,6 +96,11 @@ journalctl --user -u chatdex -n 30 --no-pager
 
 chatdex 是单例：第二个实例抢不到端口就会打印「chatdex 已在运行」并退出，
 且**在碰索引库之前**退出，不会写坏索引。
+
+`chatdex index` 争的是同一把锁：服务在跑时执行它会被拒绝并提示先 `systemctl --user stop chatdex`。
+这不是洁癖——两个写者会读到同一个水位、解析同一段追加内容、各写一份块，
+事务只保证各自原子、不会互相察觉，结果是同一 `seq` 出现重复块。
+日常不需要手动索引：服务自己每 30 秒增量一次。
 
 **索引里少了内容** —— 日志里搜 warning：
 

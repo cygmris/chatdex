@@ -40,6 +40,17 @@ func runIndex(args []string) error {
 	if err != nil {
 		return err
 	}
+
+	// 与 serve 争同一把「锁」：两个写者同时扫同一个库会读到同一个水位、
+	// 解析同一段追加内容、各写一份块——事务只保证各自原子，不会互相察觉。
+	// 端口绑定是 serve 已在用的单例机制，这里复用它，语义才一致。
+	ln, err := listen(cfg.Ports.API)
+	if err != nil {
+		return fmt.Errorf("chatdex 服务正在运行（端口 %d 被占用）。"+
+			"服务本身会增量索引；要手动重建请先 systemctl --user stop chatdex", cfg.Ports.API)
+	}
+	defer ln.Close()
+
 	st, sc, err := openIndex(cfg)
 	if err != nil {
 		return err

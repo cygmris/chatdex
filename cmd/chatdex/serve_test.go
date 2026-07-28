@@ -202,3 +202,39 @@ func TestStatsEndpoint(t *testing.T) {
 		t.Errorf("统计为空: %s", body)
 	}
 }
+
+// index 子命令必须与 serve 争同一把锁：两个写者同时扫同一个库会各写一份块，
+// 事务只保证各自原子、不会互相察觉。
+func TestIndexRefusesWhileServiceRunning(t *testing.T) {
+	_, apiPort, dbPath := startServe(t)
+	waitIndexed(t, apiPort)
+
+	before, err := os.Stat(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	cfg := fmt.Sprintf(`{"home":%q,"db_path":%q,"ports":{"ui":%d,"api":%d}}`,
+		dir, dbPath, freePort(t), apiPort)
+	if err := os.WriteFile(cfgPath, []byte(cfg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err = runIndex([]string{"-config", cfgPath, "-quiet"})
+	if err == nil {
+		t.Fatal("服务在跑时 index 子命令竟然执行成功了")
+	}
+	if !strings.Contains(err.Error(), "服务正在运行") {
+		t.Errorf("错误信息应说明服务正在运行，实际: %v", err)
+	}
+
+	after, err := os.Stat(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Size() != before.Size() {
+		t.Error("被拒绝的 index 仍然动了索引库")
+	}
+}
