@@ -85,3 +85,15 @@ CREATE INDEX IF NOT EXISTS summary_queue_pick ON summary_queue(state, priority, 
 var migrations = []string{
 	`ALTER TABLE sessions ADD COLUMN summary_msg_count INTEGER NOT NULL DEFAULT 0`,
 }
+
+// repairs 是每次启动都跑一遍的数据自愈语句。
+//
+// 与 migrations 的区别：那是结构变更（跑一次就够），这是**修正存量数据**——
+// 早期版本把 seq=-1 的摘要块算进了 msg_count，已受影响的会话不会自己改回来。
+// 语句本身幂等，正常情况下命中 0 行，代价可以忽略。
+var repairs = []string{
+	`UPDATE sessions SET msg_count = (
+	     SELECT COUNT(*) FROM blocks b WHERE b.session_id = sessions.id AND b.seq >= 0)
+	 WHERE msg_count <> (
+	     SELECT COUNT(*) FROM blocks b WHERE b.session_id = sessions.id AND b.seq >= 0)`,
+}

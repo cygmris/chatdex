@@ -362,7 +362,9 @@ func (e *Engine) GetSession(id int64, fromSeq, limit int) (SessionView, error) {
 	err := e.db.QueryRow(`
 SELECT s.id, s.source, s.session_uid, s.agent_label, s.file_path, s.project_path,
        s.started_at, s.ended_at, s.msg_count, COALESCE(s.summary,''), s.alive,
-       (SELECT COUNT(*) FROM blocks WHERE session_id = s.id)
+       -- seq>=0 才是对话消息：摘要块存在 seq=-1，它进 FTS 但不进回读列表，
+       -- 若计入总数，分页器会多出一页永远空的「下一页」
+       (SELECT COUNT(*) FROM blocks WHERE session_id = s.id AND seq >= 0)
 FROM sessions s WHERE s.id = ?`, id).
 		Scan(&v.ID, &v.Source, &v.SessionUID, &v.AgentLabel, &v.FilePath, &v.ProjectPath,
 			&v.StartedAt, &v.EndedAt, &v.MsgCount, &v.Summary, &alive, &v.Total)

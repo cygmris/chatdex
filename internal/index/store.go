@@ -56,6 +56,12 @@ func Open(path string) (*Store, error) {
 			return nil, fmt.Errorf("迁移 %q: %w", m, err)
 		}
 	}
+	for _, r := range repairs {
+		if _, err := db.Exec(r); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("自愈 %q: %w", r, err)
+		}
+	}
 	s := &Store{db: db, path: path}
 	// WAL 的 -wal / -shm 边车文件同样含数据，一并收权限。
 	// 建表已经写过一次，此刻它们已存在。
@@ -139,7 +145,7 @@ func (s *Store) AppendBlocks(sessionID int64, blocks []model.Block, wm Watermark
 	}
 
 	if _, err := tx.Exec(`UPDATE sessions SET size=?, mtime=?, offset=?,
-                          msg_count=(SELECT COUNT(*) FROM blocks WHERE session_id=?),
+                          msg_count=(SELECT COUNT(*) FROM blocks WHERE session_id=? AND seq>=0),
                           ended_at=MAX(ended_at, ?)
                           WHERE id=?`,
 		wm.Size, wm.MTime, wm.Offset, sessionID, maxTS(blocks), sessionID); err != nil {

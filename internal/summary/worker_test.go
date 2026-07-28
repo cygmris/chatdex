@@ -122,6 +122,62 @@ func TestSummaryIsSearchableAsText(t *testing.T) {
 			t.Error("摘要块混进了回读视图")
 		}
 	}
+	// Total 也不能把它算进去：算进去分页器就会多出一页永远空的「下一页」
+	if v.Total != len(v.Messages) {
+		t.Errorf("Total=%d 但只列出 %d 条——摘要块被计进了总数", v.Total, len(v.Messages))
+	}
+}
+
+// 分页边界：消息数正好等于一页时，摘要块若被计入总数，
+// 前端就会多出一个「下一页」，点进去是空的。
+func TestSummaryDoesNotCreatePhantomPage(t *testing.T) {
+	const page = 20
+	st, w, _ := newEnv(t, "一句摘要")
+	id := seed(t, st, "exact", page)
+
+	text, n, err := w.Summarize(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetSummary(id, text, "m", n); err != nil {
+		t.Fatal(err)
+	}
+
+	e := search.NewEngine(st.DB())
+	v, err := e.GetSession(id, 0, page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Total != page || len(v.Messages) != page {
+		t.Fatalf("Total=%d 返回=%d，want 各 %d", v.Total, len(v.Messages), page)
+	}
+	// 前端据此判断有没有下一页
+	if v.FromSeq+page < v.Total {
+		t.Error("出现了幻影下一页")
+	}
+
+	// 会话元数据里的消息数同样不该含摘要块（检索结果与时间线都显示它）
+	res, err := e.SearchSessions(search.Query{Text: "timemachine"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Sessions) != 1 || res.Sessions[0].MsgCount != page {
+		t.Errorf("MsgCount = %d, want %d", res.Sessions[0].MsgCount, page)
+	}
+
+	// 再追加内容后重算，msg_count 仍不得把摘要块算进去
+	if err := st.AppendBlocks(id, []model.Block{
+		{Seq: page, Kind: model.KindUser, Body: "追加一条"},
+	}, index.Watermark{Size: 2, MTime: 2, Offset: 2}); err != nil {
+		t.Fatal(err)
+	}
+	v2, err := e.GetSession(id, 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v2.Total != page+1 || len(v2.Messages) != page+1 {
+		t.Errorf("追加后 Total=%d 返回=%d，want 各 %d", v2.Total, len(v2.Messages), page+1)
+	}
 }
 
 // 队列落库 + 可中断续跑：kill 掉进程后重启，必须从中断处继续而不是从头。

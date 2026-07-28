@@ -257,3 +257,38 @@ func TestMigrationAddsColumnToExistingDB(t *testing.T) {
 	}
 	st3.Close()
 }
+
+// 早期版本把 seq=-1 的摘要块算进了 msg_count，受影响的会话不会自己改回来。
+// 重新打开索引库应把它修正过来（幂等，正常情况命中 0 行）。
+func TestRepairFixesStaleMsgCount(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "index.db")
+	st, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := seedSession(t, st, "/tmp/repair.jsonl")
+	if err := st.AppendBlocks(id, []model.Block{
+		{Seq: 0, Kind: model.KindUser, Body: "一"},
+		{Seq: 1, Kind: model.KindUser, Body: "二"},
+	}, Watermark{Size: 1, MTime: 1, Offset: 1}); err != nil {
+		t.Fatal(err)
+	}
+	// 模拟旧版本留下的错误计数
+	if _, err := st.DB().Exec(`UPDATE sessions SET msg_count = 3 WHERE id = ?`, id); err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+
+	st2, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st2.Close()
+	var got int
+	if err := st2.DB().QueryRow(`SELECT msg_count FROM sessions WHERE id = ?`, id).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got != 2 {
+		t.Errorf("msg_count = %d, want 2（自愈未生效）", got)
+	}
+}
