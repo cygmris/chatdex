@@ -31,6 +31,8 @@ header {
 }
 h1 { margin: 0; font-size: 17px; letter-spacing: .5px; }
 .stats { color: var(--dim); font-size: 12px; }
+#summary-bar { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+button.mini { padding: 2px 8px; font-size: 11px; }
 
 main { padding: 18px 20px 60px; max-width: 1100px; }
 

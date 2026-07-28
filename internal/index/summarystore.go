@@ -58,6 +58,7 @@ SELECT s.id,
        'pending', 0, '', ?
 FROM sessions s
 WHERE s.alive = 1
+  AND s.msg_count > 0
   AND (s.summary IS NULL
        OR s.msg_count > MAX(s.summary_msg_count * ?, s.summary_msg_count + ?))
   AND NOT EXISTS (SELECT 1 FROM summary_queue q
@@ -118,6 +119,28 @@ SET summary=?, summary_model=?, summary_at=?, summary_msg_count=? WHERE id=?`,
 	if _, err := tx.Exec(`INSERT INTO blocks (session_id, seq, ts, kind, tool_name, tool_use_id, truncated, raw_bytes, body)
 VALUES (?, ?, ?, 'summary', '', '', 0, ?, ?)`,
 		sessionID, summarySeq, now, len(text), search.NormalizeIndex(text)); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE summary_queue SET state='done', err='', updated_at=? WHERE session_id=?`,
+		now, sessionID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// SkipSummary 把「没有可摘要内容」的会话终结掉。
+//
+// 这类会话（只有元数据、没有消息）重试多少次都一样，算成失败会让进度条
+// 一直挂着一个永远修不好的「失败 N」。存空摘要即可：既不再入队，也不虚报失败。
+func (s *Store) SkipSummary(sessionID int64) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	now := time.Now().Unix()
+	if _, err := tx.Exec(`UPDATE sessions SET summary='', summary_at=?, summary_msg_count=msg_count WHERE id=?`,
+		now, sessionID); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(`UPDATE summary_queue SET state='done', err='', updated_at=? WHERE session_id=?`,

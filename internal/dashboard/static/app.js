@@ -173,13 +173,46 @@ async function loadPage() {
 
 // ---------- 启动 ----------
 
+let statsTimer = null;
+
 async function loadStats() {
   try {
     const s = await api('/api/stats');
     $('stats').textContent =
-      `${s.sessions} 个会话 · ${s.blocks} 个内容块 · 索引库 ${fmtBytes(s.db_bytes)}` +
-      (s.summarized ? ` · ${s.summarized} 个已有摘要` : '');
+      `${s.sessions} 个会话 · ${s.blocks} 个内容块 · 索引库 ${fmtBytes(s.db_bytes)}`;
+    renderSummaryBar(s);
   } catch { $('stats').textContent = '索引状态不可用'; }
+}
+
+// 摘要是跨夜任务（实测全量约 19 小时），进度与暂停/继续都要看得见摸得着。
+function renderSummaryBar(s) {
+  const bar = $('summary-bar');
+  if (!s.llm_ready) {
+    bar.hidden = false;
+    $('summary-progress').textContent =
+      `摘要未启用（本地 LLM 不可用）${s.summarized ? ` · 已有 ${s.summarized} 条` : ''}`;
+    $('summary-toggle').hidden = true;
+    return;
+  }
+  const p = s.summary || {};
+  const total = (p.done || 0) + (p.pending || 0) + (p.running || 0) + (p.failed || 0);
+  bar.hidden = false;
+  $('summary-progress').textContent = total
+    ? `摘要 ${p.done || 0}/${total}` +
+      (p.pending ? ` · 待处理 ${p.pending}` : '') +
+      (p.failed ? ` · 失败 ${p.failed}` : '') +
+      (s.summary_paused ? ' · 已暂停' : '')
+    : '摘要队列为空';
+  const btn = $('summary-toggle');
+  btn.hidden = false;
+  btn.textContent = s.summary_paused ? '继续' : '暂停';
+  btn.onclick = async () => {
+    btn.disabled = true;
+    try {
+      await fetch('/api/summary/' + (s.summary_paused ? 'resume' : 'pause'), { method: 'POST' });
+      await loadStats();
+    } finally { btn.disabled = false; }
+  };
 }
 
 async function loadProjects() {
@@ -203,5 +236,7 @@ $('back').onclick = () => {
 };
 
 loadStats();
+// 摘要在后台持续推进，进度定期刷新（轮询即可，不值得为它上 WebSocket）
+statsTimer = setInterval(loadStats, 10000);
 loadProjects();
 doSearch(0);

@@ -337,3 +337,54 @@ func TestLongSessionUsesBoundedMapReduce(t *testing.T) {
 		t.Errorf("超长会话应走 map-reduce，实际只调用 %d 次", n)
 	}
 }
+
+// 只有元数据、没有消息的会话是终态，不该被反复重试成「失败」——
+// 进度条上挂一个永远修不好的失败数，比没有这个数字更糟。
+func TestEmptySessionIsSkippedNotFailed(t *testing.T) {
+	st, w, _ := newEnv(t, "一句摘要")
+	id, err := st.UpsertSession(model.SessionMeta{
+		Source: model.SourceClaude, SessionUID: "empty", FilePath: "/s/empty.jsonl",
+		ProjectPath: "/proj", StartedAt: 1000, EndedAt: 2000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 手动入队（EnqueueMissing 会因 msg_count=0 直接跳过它）
+	if err := st.EnqueueSummary(id, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go w.Run(ctx)
+
+	waitFor(t, func() bool {
+		p, _ := st.SummaryProgress()
+		return p.Pending == 0 && p.Running == 0
+	}, "空会话未被处理完")
+
+	p, _ := st.SummaryProgress()
+	if p.Failed != 0 {
+		t.Errorf("空会话被记成失败: %+v", p)
+	}
+	if p.Done != 1 {
+		t.Errorf("空会话未被终结: %+v", p)
+	}
+}
+
+// 没有消息的会话根本不该进队列。
+func TestEnqueueMissingSkipsEmptySessions(t *testing.T) {
+	st, _, _ := newEnv(t, "x")
+	if _, err := st.UpsertSession(model.SessionMeta{
+		Source: model.SourceClaude, SessionUID: "e2", FilePath: "/s/e2.jsonl",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.EnqueueMissing(); err != nil {
+		t.Fatal(err)
+	}
+	p, _ := st.SummaryProgress()
+	if p.Pending != 0 {
+		t.Errorf("空会话被入队了: %+v", p)
+	}
+}

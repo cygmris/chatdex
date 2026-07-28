@@ -2,6 +2,7 @@ package summary
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -23,6 +24,9 @@ const (
 	// pausedWait 比 idleWait 短得多：用户点了「继续」不该再等半分钟才动。
 	pausedWait = time.Second
 )
+
+// errNoContent 表示会话里没有可摘要的消息——这是终态，不是可重试的失败。
+var errNoContent = errors.New("会话无可摘要内容")
 
 // Worker 是摘要的后台生成器。
 //
@@ -92,7 +96,12 @@ func (w *Worker) Run(ctx context.Context) {
 		}
 
 		start := time.Now()
-		if err := w.summarizeAndStore(ctx, id); err != nil {
+		if err := w.summarizeAndStore(ctx, id); errors.Is(err, errNoContent) {
+			// 只有元数据、没有消息的会话：重试多少次都一样，直接终结
+			if e := w.Store.SkipSummary(id); e != nil {
+				slog.Error("跳过空会话时出错", "session", id, "err", e)
+			}
+		} else if err != nil {
 			slog.Warn("生成摘要失败", "session", id, "err", err)
 			if e := w.Store.FailSummary(id, err.Error()); e != nil {
 				slog.Error("记录摘要失败状态时出错", "err", e)
@@ -140,7 +149,7 @@ func (w *Worker) Summarize(ctx context.Context, sessionID int64) (string, int, e
 		return "", 0, err
 	}
 	if len(msgs) == 0 {
-		return "", 0, fmt.Errorf("会话无可摘要内容")
+		return "", 0, errNoContent
 	}
 
 	chunks := Split(Distill(msgs))
