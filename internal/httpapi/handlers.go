@@ -61,6 +61,19 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, view)
 }
 
+func (s *Server) handleTimeline(w http.ResponseWriter, r *http.Request) {
+	// 与检索共用同一套过滤条件解析（需求 9.4）
+	gs, err := s.Engine.Timeline(parseQuery(r))
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if gs == nil {
+		gs = []search.ProjectGroup{}
+	}
+	writeJSON(w, http.StatusOK, gs)
+}
+
 func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 	ps, err := s.Engine.Projects()
 	if err != nil {
