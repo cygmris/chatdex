@@ -43,7 +43,3 @@ func main() {
 		os.Exit(1)
 	}
 }
-
-func runServe([]string) error  { return fmt.Errorf("serve 尚未实现") }
-func runIndex([]string) error  { return fmt.Errorf("index 尚未实现") }
-func runStatus([]string) error { return fmt.Errorf("status 尚未实现") }

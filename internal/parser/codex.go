@@ -69,8 +69,12 @@ var codexIgnorableOuter = map[string]bool{
 }
 
 // codexIgnorablePayload 是 response_item 里不产块的负载类型。
+// 实测全量语料补齐（否则这几种会每个会话刷一屏 warning，把真正的未知结构淹没）。
 var codexIgnorablePayload = map[string]bool{
-	"reasoning": true, // 思考过程，不在需求 7.1 的索引范围内
+	"reasoning":          true, // 思考过程，不在需求 7.1 的索引范围内
+	"tool_search_call":   true, // MCP 工具清单发现，不是对话内容
+	"tool_search_output": true, // 同上：返回的是工具定义而非工具结果
+	"web_search_call":    true, // 只有 id 与状态，没有查询词，索引它没有信息量
 }
 
 func (c Codex) Meta(path string) (model.SessionMeta, error) {
@@ -167,6 +171,12 @@ func (c Codex) block(rec codexRecord, ts int64, sawUser *bool, toolNames map[str
 			return model.Block{}, false
 		}
 		return model.Block{TS: ts, Kind: kind, Body: body}, true
+
+	case "agent_message":
+		// Codex 的子代理任务派发（同文件内，需求 2.3）。正文在 content[].input_text，
+		// 同列表里的 encrypted_content 项没有 text 字段，展平时自然跳过。
+		body := StripInjected(flattenCodexText(p.Content))
+		return model.Block{TS: ts, Kind: model.KindUser, Body: body}, body != ""
 
 	case "function_call", "custom_tool_call":
 		toolNames[p.CallID] = p.Name

@@ -1,0 +1,11 @@
+[Unit]
+Description=chatdex — Claude Code / Codex 会话检索服务（dashboard :5021 / API+MCP :5022）
+After=network.target
+
+[Service]
+ExecStart=%h/.local/bin/chatdex serve
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target

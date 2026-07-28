@@ -1,0 +1,40 @@
+// Package httpapi 暴露检索能力的 JSON API。
+//
+// 所有查询一律走 search.Engine，handler 里不得写 SQL——dashboard、MCP 与聊天
+// 三端必须共用同一套检索逻辑（需求 4.4）。
+package httpapi
+
+import (
+	"encoding/json"
+	"net/http"
+
+	"github.com/cygmris/chatdex/internal/index"
+	"github.com/cygmris/chatdex/internal/search"
+)
+
+// Server 持有各端共用的依赖。
+type Server struct {
+	Engine *search.Engine
+	Store  *index.Store
+}
+
+// Register 把 API 路由挂到 mux 上。
+//
+// 同一个 mux 会被 :5021（前端）与 :5022（API+MCP）两个 listener 共用，
+// 于是页面对自己的 origin 发请求即可，不需要 CORS，也不必反代跳一次。
+func (s *Server) Register(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/search", s.handleSearch)
+	mux.HandleFunc("GET /api/session/{id}", s.handleSession)
+	mux.HandleFunc("GET /api/projects", s.handleProjects)
+	mux.HandleFunc("GET /api/stats", s.handleStats)
+}
+
+func writeJSON(w http.ResponseWriter, code int, v any) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+func writeErr(w http.ResponseWriter, code int, msg string) {
+	writeJSON(w, code, map[string]string{"error": msg})
+}

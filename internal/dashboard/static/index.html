@@ -1,0 +1,51 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>chatdex — 会话检索</title>
+<link rel="stylesheet" href="/style.css">
+
+<header>
+  <h1>chatdex</h1>
+  <div id="stats" class="stats">载入中…</div>
+</header>
+
+<main>
+  <section id="search-pane">
+    <form id="search-form">
+      <input id="q" type="search" placeholder="关键词（中英皆可，如：增量备份 / rsync 部署）" autofocus>
+      <button type="submit">检索</button>
+    </form>
+
+    <div class="filters">
+      <select id="source">
+        <option value="">全部来源</option>
+        <option value="claude">Claude Code</option>
+        <option value="codex">Codex</option>
+      </select>
+      <select id="kind">
+        <option value="">全部内容类型</option>
+        <option value="user">仅我说的</option>
+        <option value="assistant">仅助手回答</option>
+        <option value="tool_use">仅工具调用</option>
+        <option value="tool_result">仅工具结果</option>
+        <option value="summary">仅会话摘要</option>
+      </select>
+      <input id="tool" type="text" placeholder="工具名，如 Bash">
+      <select id="project"><option value="">全部项目</option></select>
+      <input id="from" type="date" title="起始日期">
+      <input id="to" type="date" title="结束日期">
+    </div>
+
+    <div id="results"></div>
+  </section>
+
+  <section id="session-pane" hidden>
+    <div class="session-head">
+      <button id="back">← 返回结果</button>
+      <div id="session-meta"></div>
+    </div>
+    <div id="messages"></div>
+    <div id="pager"></div>
+  </section>
+</main>
+
+<script src="/app.js"></script>

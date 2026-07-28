@@ -10,6 +10,16 @@ import (
 // CJK 被切成单字后每个字都是一个 token，给小了会把高亮短语从中间截断。
 const snippetTokensStr = "64"
 
+// HitOpen / HitClose 是片段里标记命中位置的两个控制字符。
+//
+// 刻意不用 <mark>：片段正文是会话原文，里面完全可能有 <script>。
+// 前端必须先把整段文本按 HTML 转义，再把这两个哨兵换成 <mark></mark>，
+// 否则等于把历史会话里的任意 HTML 直接注进页面。
+const (
+	HitOpen  = "\x02"
+	HitClose = "\x03"
+)
+
 // ftsScoreCTE 是所有检索查询的公共前置：先在**只有 FTS 表**的上下文里算出
 // 每个命中块的 bm25 分数与高亮片段，再由外层去 join 过滤。
 //
@@ -19,7 +29,7 @@ const snippetTokensStr = "64"
 // `AS MATERIALIZED` 是关键：它阻止优化器把 CTE 展平回外层。
 const ftsScoreCTE = `SELECT rowid AS bid,
        bm25(blocks_fts) AS score,
-       snippet(blocks_fts, 0, '<mark>', '</mark>', '…', ` + snippetTokensStr + `) AS snip
+       snippet(blocks_fts, 0, char(2), char(3), '…', ` + snippetTokensStr + `) AS snip
 FROM blocks_fts WHERE blocks_fts MATCH ?`
 
 // Engine 是全项目**唯一**的检索实现：dashboard、MCP 端点与聊天 agent
