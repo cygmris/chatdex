@@ -1,0 +1,9 @@
+{"type":"mode","mode":"normal","sessionId":"11111111-2222-3333-4444-555555555555"}
+{"type":"user","timestamp":"2026-07-28T10:00:00.000Z","cwd":"/home/user/demo","sessionId":"11111111-2222-3333-4444-555555555555","message":{"role":"user","content":"<system-reminder>\n# claudeMd\n注入的 CLAUDE.md 全文，很长很长。\n</system-reminder>\n做一个类似 timemachine 的 profile 管理工具"}}
+{"type":"assistant","timestamp":"2026-07-28T10:00:05.000Z","cwd":"/home/user/demo","sessionId":"11111111-2222-3333-4444-555555555555","message":{"role":"assistant","content":[{"type":"thinking","thinking":"先看看目录"},{"type":"text","text":"我先列一下目录结构"},{"type":"tool_use","id":"toolu_01","name":"Bash","input":{"command":"rsync -av /src/ /dst/","description":"同步目录"}}]}}
+这一行不是合法 JSON，必须被跳过而不中断整个文件
+{"type":"user","timestamp":"2026-07-28T10:00:06.000Z","cwd":"/home/user/demo","sessionId":"11111111-2222-3333-4444-555555555555","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_01","content":[{"type":"text","text":"sent 1,024 bytes  received 35 bytes"}]}]}}
+{"type":"file-history-delta","sessionId":"11111111-2222-3333-4444-555555555555"}
+{"type":"user","timestamp":"2026-07-28T10:01:00.000Z","cwd":"/home/user/demo","sessionId":"11111111-2222-3333-4444-555555555555","message":{"role":"user","content":"<system-reminder>纯注入，剥完为空</system-reminder>"}}
+{"type":"assistant","timestamp":"2026-07-28T10:01:10.000Z","cwd":"/home/user/demo","sessionId":"11111111-2222-3333-4444-555555555555","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_02","name":"Read","input":{"file_path":"/home/user/demo/README.md"}}]}}
+{"type":"user","timestamp":"2026-07-28T10:01:11.000Z","cwd":"/home/user/demo","sessionId":"11111111-2222-3333-4444-555555555555","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_02","content":"# demo\n增量备份项目说明"}]}}
