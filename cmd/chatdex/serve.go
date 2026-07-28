@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -12,8 +13,10 @@ import (
 	"github.com/cygmris/chatdex/internal/dashboard"
 	"github.com/cygmris/chatdex/internal/httpapi"
 	"github.com/cygmris/chatdex/internal/index"
+	"github.com/cygmris/chatdex/internal/llm"
 	"github.com/cygmris/chatdex/internal/mcpserver"
 	"github.com/cygmris/chatdex/internal/search"
+	"github.com/cygmris/chatdex/internal/summary"
 )
 
 // loopback 是唯一允许的监听地址。
@@ -54,6 +57,13 @@ func runServe(args []string) error {
 	engine := search.NewEngine(st.DB())
 	api := &httpapi.Server{Engine: engine, Store: st}
 
+	// 摘要是可选能力：本地 LLM 配不上或没起来，索引与检索照常，只是没有摘要。
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if w := startSummary(ctx, cfg, st, engine); w != nil {
+		api.Summary = w
+	}
+
 	// 两个 listener 共用同一个 mux：页面与 API 同源，无需 CORS
 	mux := http.NewServeMux()
 	api.Register(mux)
@@ -77,6 +87,27 @@ func runServe(args []string) error {
 
 func listen(port int) (net.Listener, error) {
 	return net.Listen("tcp", fmt.Sprintf("%s:%d", loopback, port))
+}
+
+// startSummary 起摘要后台任务；LLM 端点非法或不可用时返回 nil（功能降级，不是错误）。
+func startSummary(ctx context.Context, cfg config.Config, st *index.Store, engine *search.Engine) *summary.Worker {
+	if !cfg.Summary.Enabled {
+		slog.Info("摘要任务已在配置中关闭")
+		return nil
+	}
+	client, err := llm.NewOllama(cfg.LLM.Endpoint)
+	if err != nil {
+		// 端点非回环会走到这里：服务照常起，只是没有 LLM 功能
+		slog.Warn("LLM 端点不可用，摘要与聊天功能关闭", "err", err)
+		return nil
+	}
+	w := &summary.Worker{
+		Store: st, Engine: engine, LLM: client,
+		Model: cfg.Summary.Model, ThrottleMS: cfg.Summary.ThrottleMS,
+	}
+	go w.Run(ctx)
+	slog.Info("摘要任务已启动", "model", cfg.Summary.Model, "throttle_ms", cfg.Summary.ThrottleMS)
+	return w
 }
 
 // scanLoop 后台增量扫描，保持索引最新（需求 5.2）。

@@ -224,3 +224,36 @@ func TestUpsertSessionIsIdempotent(t *testing.T) {
 		t.Errorf("会话行数 = %d, want 1", n)
 	}
 }
+
+// 已有的库要能升级：CREATE TABLE IF NOT EXISTS 对存量库加不了列，
+// 忘了迁移的话新字段在开发机（新建库）一切正常，一升级到线上索引就炸。
+func TestMigrationAddsColumnToExistingDB(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "index.db")
+
+	// 造一个「旧版」库：没有 summary_msg_count 列
+	st, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DB().Exec(`ALTER TABLE sessions DROP COLUMN summary_msg_count`); err != nil {
+		t.Skipf("本机 SQLite 不支持 DROP COLUMN，跳过：%v", err)
+	}
+	st.Close()
+
+	// 重新打开应自动补列
+	st2, err := Open(path)
+	if err != nil {
+		t.Fatalf("打开旧版库失败（迁移没跑）: %v", err)
+	}
+	defer st2.Close()
+	if _, err := st2.DB().Exec(`SELECT summary_msg_count FROM sessions LIMIT 1`); err != nil {
+		t.Errorf("迁移未补上列: %v", err)
+	}
+
+	// 再开一次：迁移必须可重复执行
+	st3, err := Open(path)
+	if err != nil {
+		t.Fatalf("重复迁移失败: %v", err)
+	}
+	st3.Close()
+}

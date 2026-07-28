@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/cygmris/chatdex/internal/index"
 	"github.com/cygmris/chatdex/internal/search"
 )
 
@@ -69,11 +70,44 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, ps)
 }
 
+// statsResponse 在索引统计之上带出摘要进度，供 dashboard 顶部展示。
+type statsResponse struct {
+	index.Stats
+	Summary  index.Progress `json:"summary"`
+	Paused   bool           `json:"summary_paused"`
+	LLMReady bool           `json:"llm_ready"`
+}
+
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	st, err := s.Store.Stats()
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, st)
+	out := statsResponse{Stats: st, LLMReady: s.Summary != nil}
+	if p, err := s.Store.SummaryProgress(); err == nil {
+		out.Summary = p
+	}
+	if s.Summary != nil {
+		out.Paused = s.Summary.Paused()
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleSummaryPause(w http.ResponseWriter, r *http.Request) {
+	if s.Summary == nil {
+		writeErr(w, http.StatusServiceUnavailable, "摘要任务未启用（本地 LLM 不可用）")
+		return
+	}
+	s.Summary.Pause()
+	writeJSON(w, http.StatusOK, map[string]bool{"paused": true})
+}
+
+func (s *Server) handleSummaryResume(w http.ResponseWriter, r *http.Request) {
+	if s.Summary == nil {
+		writeErr(w, http.StatusServiceUnavailable, "摘要任务未启用（本地 LLM 不可用）")
+		return
+	}
+	s.Summary.Resume()
+	writeJSON(w, http.StatusOK, map[string]bool{"paused": false})
 }

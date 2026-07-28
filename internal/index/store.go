@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/cygmris/chatdex/internal/model"
 	"github.com/cygmris/chatdex/internal/search"
@@ -48,6 +49,12 @@ func Open(path string) (*Store, error) {
 	if _, err := db.Exec(schemaSQL); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("建表: %w", err)
+	}
+	for _, m := range migrations {
+		if _, err := db.Exec(m); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+			db.Close()
+			return nil, fmt.Errorf("迁移 %q: %w", m, err)
+		}
 	}
 	s := &Store{db: db, path: path}
 	// WAL 的 -wal / -shm 边车文件同样含数据，一并收权限。
@@ -173,7 +180,9 @@ func (s *Store) ResetSession(sessionID int64) error {
 	if _, err := tx.Exec(`DELETE FROM blocks WHERE session_id = ?`, sessionID); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`UPDATE sessions SET size=0, mtime=0, offset=0, msg_count=0 WHERE id = ?`, sessionID); err != nil {
+	// 内容整个重建了，旧摘要不再成立——清掉，由队列重新生成
+	if _, err := tx.Exec(`UPDATE sessions SET size=0, mtime=0, offset=0, msg_count=0,
+        summary=NULL, summary_at=0, summary_msg_count=0 WHERE id = ?`, sessionID); err != nil {
 		return err
 	}
 	return tx.Commit()

@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     summary           TEXT,                      -- NULL = 尚未生成，缺摘要不阻断检索
     summary_model     TEXT    NOT NULL DEFAULT '',
     summary_at        INTEGER NOT NULL DEFAULT 0,
+    summary_msg_count INTEGER NOT NULL DEFAULT 0, -- 生成摘要时的消息数，用于判断会话是否已显著增长（R11.8）
     size              INTEGER NOT NULL DEFAULT 0, -- 增量水位
     mtime             INTEGER NOT NULL DEFAULT 0,
     offset            INTEGER NOT NULL DEFAULT 0,
@@ -75,3 +76,12 @@ CREATE TABLE IF NOT EXISTS summary_queue (
 );
 CREATE INDEX IF NOT EXISTS summary_queue_pick ON summary_queue(state, priority, session_id);
 `
+
+// migrations 是建表之后要补的增量结构变更。
+//
+// CREATE TABLE IF NOT EXISTS 只在库不存在时生效，对**已有**的库加不了列——
+// 忘了这一步，新字段在开发机上（新建库）一切正常，一升级到已有索引就炸。
+// 每条执行时忽略「列已存在」错误，于是重复运行是安全的。
+var migrations = []string{
+	`ALTER TABLE sessions ADD COLUMN summary_msg_count INTEGER NOT NULL DEFAULT 0`,
+}

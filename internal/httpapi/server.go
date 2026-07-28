@@ -12,10 +12,20 @@ import (
 	"github.com/cygmris/chatdex/internal/search"
 )
 
+// Summarizer 是摘要后台任务的控制面，由 internal/summary 实现。
+// 这里用最小接口而不是直接依赖具体类型：LLM 不可用时它可以是 nil。
+type Summarizer interface {
+	Pause()
+	Resume()
+	Paused() bool
+}
+
 // Server 持有各端共用的依赖。
 type Server struct {
 	Engine *search.Engine
 	Store  *index.Store
+	// Summary 可为 nil（本地 LLM 不可用时不启动摘要任务）。
+	Summary Summarizer
 }
 
 // Register 把 API 路由挂到 mux 上。
@@ -27,6 +37,8 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/session/{id}", s.handleSession)
 	mux.HandleFunc("GET /api/projects", s.handleProjects)
 	mux.HandleFunc("GET /api/stats", s.handleStats)
+	mux.HandleFunc("POST /api/summary/pause", s.handleSummaryPause)
+	mux.HandleFunc("POST /api/summary/resume", s.handleSummaryResume)
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
