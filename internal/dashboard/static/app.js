@@ -119,6 +119,57 @@ function renderResults(res, offset) {
   if ($('prev')) $('prev').onclick = () => doSearch(Math.max(0, offset - 20));
 }
 
+// ---------- 时间线 ----------
+//
+// 与搜索**并列**而非取代（需求 9.1）：过滤条件两边共用，切视图不用重设。
+
+let view = 'search';
+
+async function loadTimeline() {
+  const box = $('timeline');
+  box.innerHTML = '<p class="hint">载入中…</p>';
+  try {
+    const gs = await api('/api/timeline?' + currentQuery({ limit: 200 }));
+    if (!gs.length) {
+      box.innerHTML = '<p class="hint">没有符合条件的会话。</p>';
+      return;
+    }
+    box.innerHTML = gs.map((g) => `
+      <section class="group">
+        <h2>${esc(g.project_path)}
+          <span class="count">${g.total} 个会话${g.total > g.sessions.length ? `（展开 ${g.sessions.length}）` : ''}</span>
+        </h2>
+        ${g.sessions.map((s) => `
+          <div class="tl" data-id="${s.id}">
+            <span class="badge ${esc(s.source)}">${s.source === 'codex' ? 'Codex' : 'Claude'}</span>
+            ${s.agent_label ? '<span class="badge sub">子代理</span>' : ''}
+            <span class="time">${fmtRange(s.started_at, s.ended_at)}</span>
+            <span class="msgs">${s.msg_count} 条</span>
+            <span class="label${s.has_summary ? ' from-summary' : ''}">${esc(s.label || '（无内容）')}</span>
+          </div>`).join('')}
+      </section>`).join('');
+    box.querySelectorAll('.tl').forEach((el) =>
+      el.onclick = () => openSession(+el.dataset.id, 0));
+  } catch (e) {
+    box.innerHTML = `<p class="err">时间线载入失败：${esc(e.message)}</p>`;
+  }
+}
+
+function switchView(next) {
+  view = next;
+  const isSearch = view === 'search';
+  $('tab-search').classList.toggle('active', isSearch);
+  $('tab-timeline').classList.toggle('active', !isSearch);
+  $('search-form').hidden = !isSearch;
+  $('results').hidden = !isSearch;
+  $('timeline').hidden = isSearch;
+  if (isSearch) doSearch(0); else loadTimeline();
+}
+
+function refreshCurrentView() {
+  if (view === 'search') doSearch(0); else loadTimeline();
+}
+
 // ---------- 会话回读 ----------
 
 const PAGE = 100;
@@ -228,8 +279,12 @@ async function loadProjects() {
 }
 
 $('search-form').onsubmit = (e) => { e.preventDefault(); doSearch(0); };
+// 过滤条件两个视图共用（需求 9.4）
 ['source', 'kind', 'project', 'from', 'to'].forEach((id) =>
-  $(id).onchange = () => doSearch(0));
+  $(id).onchange = () => refreshCurrentView());
+$('tab-search').onclick = () => switchView('search');
+$('tab-timeline').onclick = () => switchView('timeline');
+$('timeline').hidden = true;
 $('back').onclick = () => {
   $('session-pane').hidden = true;
   $('search-pane').hidden = false;

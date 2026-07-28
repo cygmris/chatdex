@@ -14,6 +14,11 @@
 </header>
 
 <main>
+  <nav class="tabs">
+    <button id="tab-search" class="tab active">检索</button>
+    <button id="tab-timeline" class="tab">时间线</button>
+  </nav>
+
   <section id="search-pane">
     <form id="search-form">
       <input id="q" type="search" placeholder="关键词（中英皆可，如：增量备份 / rsync 部署）" autofocus>
@@ -41,6 +46,7 @@
     </div>
 
     <div id="results"></div>
+    <div id="timeline"></div>
   </section>
 
   <section id="session-pane" hidden>
