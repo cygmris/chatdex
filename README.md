@@ -1,77 +1,88 @@
 # chatdex
 
-**把 Claude Code 与 Codex 的全部历史会话变成可检索的东西。** 本地常驻，只读，不联网。
+**Make every past Claude Code and Codex session searchable.** Runs locally, reads only, never phones home.
+
+English | [简体中文](README.zh-CN.md)
 
 [![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![SQLite FTS5](https://img.shields.io/badge/SQLite-FTS5-003B57?logo=sqlite&logoColor=white)](https://sqlite.org/fts5.html)
 [![MCP](https://img.shields.io/badge/MCP-endpoint-6E56CF)](https://modelcontextprotocol.io)
 
-> 你和 AI 一起做的每个决定、踩过的每个坑、写对的每条命令，都躺在几千个 JSONL 文件里，
-> 没有任何入口能找回来。chatdex 给它们一个入口——给你，也给 agent 自己。
+> Every decision you made with an AI assistant, every trap you fell into, every command you finally
+> got right — it's all sitting in thousands of JSONL files with no way back in. chatdex gives you
+> that way in. And gives it to your agents too.
 
-![检索视图](docs/images/search-light.png)
+![Search](docs/images/search.png)
 
 ---
 
-## 它解决什么
+## Why
 
-`~/.claude/projects/` 和 `~/.codex/sessions/` 里堆着你全部的工作记录。`grep` 撑不住，因为：
+`~/.claude/projects/` and `~/.codex/sessions/` hold your entire working history. `grep` doesn't cut it:
 
-- **中文搜不到。** SQLite FTS5 的 `unicode61` 把一整句中文当成一个 token，「限流」搜不出「请求限流」。
-- **命中最多 ≠ 你要找的。** 实测：找某段对话时，命中最多的两个会话（2272 / 2154 次）都不是目标，目标只命中 669 次——那两个只是长日志里反复提到这个词。
-- **答案往往在工具结果里。** 「上次那条命令怎么写的」不在对话正文，在 `tool_use` 的参数里。
-- **你记的词和原文的词对不上。** 记忆里是「增量备份」，原文写的是「类似 TimeMachine 的管理工具」。
+- **CJK doesn't match.** SQLite FTS5's `unicode61` treats a whole Chinese sentence as one token, so
+  searching 「限流」 never finds 「请求限流」.
+- **Most hits ≠ what you want.** Measured on a real corpus: the two sessions with the most hits
+  (2272 and 2154) were both wrong; the one I wanted had 669. Those two just mentioned the word
+  repeatedly in build logs.
+- **The answer is usually in a tool call.** "How did I write that command last time" isn't in the
+  prose — it's in the `tool_use` arguments.
+- **Your words aren't the transcript's words.** You remember "incremental backup"; the transcript
+  says "something like TimeMachine".
 
-chatdex 对这四条各有对策，且都有实测数字撑着（见 [`docs/architecture.md`](docs/architecture.md)）。
+chatdex has a specific answer to each, with measured numbers behind it — see
+[`docs/architecture.md`](docs/architecture.md).
 
-## 特性
+## Features
 
 | | |
 |---|---|
-| 🔍 **中英混合全文检索** | CJK 单字切分 + FTS5，中位延迟 **23 ms**（3176 会话 / 63 万块的真实语料） |
-| 🧠 **会话摘要入索引** | 本地 LLM 给每个会话写一句话摘要，**用概念词重写原文**，填平「记的词和写的词对不上」 |
-| 💬 **问一问** | 用大白话提问，LLM 多轮改写查询自己重试，并**展示出它每一轮搜了什么** |
-| 🕘 **时间线与回读** | 按项目聚合，点进去逐条回读原始对话，长会话分页 |
-| 🔌 **MCP 端点** | agent 可以自查「我上次是怎么解决这个的」 |
-| 🎨 **四套主题** | 工作台 / 纸张 / 编辑器 / 终端，明暗三态，对比度全部达 WCAG AA（脚本验证） |
-| ⚙️ **设置页** | 配置项在界面上改，多数即时生效 |
-| 🔒 **只读 + 只本机** | 见下方「安全边界」 |
+| 🔍 **Mixed CJK/ASCII full-text search** | Per-character CJK splitting over FTS5. Median latency **23 ms** on a real 3 176-session / 632 K-block corpus |
+| 🧠 **Summaries are indexed too** | A local LLM writes one line per session, **rephrasing in conceptual terms** — which is what closes the vocabulary gap above |
+| 💬 **Ask** | Ask in plain language; the LLM rewrites its query and retries across rounds, and **shows you every query it tried** |
+| 🕘 **Timeline & transcript replay** | Grouped by project; click through to read the original exchange, paginated for long sessions |
+| 🔌 **MCP endpoint** | Your agent can look up "how did I solve this last time" by itself |
+| 🎨 **Four themes** | Light/dark/follow-system, all contrast ratios verified against WCAG AA by script |
+| ⚙️ **Settings UI** | Change config in the browser; most options take effect immediately |
+| 🔒 **Read-only, localhost-only** | See [Security boundaries](#security-boundaries) |
 
-## 快速开始
+## Quick start
 
-需要 Go 1.26+。**不需要** Node、构建链、Docker，或任何网络访问。
+Requires Go 1.26+. **No** Node, no build chain, no Docker, no network access.
 
 ```bash
 git clone https://github.com/cygmris/chatdex.git && cd chatdex
 go build -o ~/.local/bin/chatdex ./cmd/chatdex
 
-chatdex index      # 首次全量索引（3000 会话约 13 分钟）
+chatdex index      # first full index — ~13 min for 3 000 sessions
 chatdex serve      # dashboard :5021 / API+MCP :5022
 ```
 
-浏览器打开 <http://127.0.0.1:5021> 即可。常驻运行：
+Open <http://127.0.0.1:5021>. To keep it running:
 
 ```bash
 cp deploy/systemd/chatdex.service ~/.config/systemd/user/
 systemctl --user enable --now chatdex
 ```
 
-完整部署与排查见 [`docs/deploy.md`](docs/deploy.md)。
+Full deployment and troubleshooting: [`docs/deploy.md`](docs/deploy.md).
 
-### 可选：本地 LLM
+### Optional: local LLM
 
-摘要与「问一问」需要本地 [Ollama](https://ollama.com)。**它是可选依赖**——不装照样索引、照样检索，只是聊天入口置灰、条目少一行摘要。
+Summaries and Ask need a local [Ollama](https://ollama.com). **It is an optional dependency** —
+without it indexing and search work exactly the same; you just lose the Ask tab and the summary line.
 
 ```bash
 ollama pull qwen2.5:7b-instruct
 ```
 
-端点**只接受回环地址**，填远端会被直接拒绝，没有开关可以放宽。原因见下。
+The endpoint **only accepts loopback addresses**. A remote address is rejected outright and there is
+no flag to relax it — see below for why.
 
-### 接入 MCP
+### Wire up MCP
 
-让 agent 自己查历史：
+Let an agent search its own history:
 
 ```json
 {
@@ -81,101 +92,148 @@ ollama pull qwen2.5:7b-instruct
 }
 ```
 
-提供三个工具：`search_sessions`（检索）、`get_session`（回读某段）、`list_projects`（列项目）。
+Three tools: `search_sessions`, `get_session`, `list_projects`.
 
-## 界面
+## Screenshots
 
-<table>
-<tr>
-<td width="50%"><b>摘要</b><br>翻或搜全部会话摘要，标出由哪个模型何时生成<br><img src="docs/images/digest-dark.png"></td>
-<td width="50%"><b>问一问</b><br>展示每一轮检索——你才知道它有没有搜对方向<br><img src="docs/images/chat-dark.png"></td>
-</tr>
-<tr>
-<td><b>时间线</b><br>按项目聚合，一眼看出那阵子在干什么<br><img src="docs/images/timeline-light.png"></td>
-<td><b>会话回读</b><br>逐条回读，含工具调用与结果、原始文件绝对路径<br><img src="docs/images/reader-light.png"></td>
-</tr>
-</table>
+> All screenshots use **synthetic demo data** — 120 fabricated sessions across 4 fictional projects.
+> Not anyone's real transcripts.
 
-### 四套主题
+### Search: summary as the headline, snippet as evidence
 
-同一组 CSS 变量的四组取值，顶栏按钮在 亮 / 暗 / 跟随系统 之间三态循环，亮暗各用哪套在设置页指派。
+Every result leads with the session summary, so you can tell at a glance which one you want.
+The snippet below it shows *why* it matched.
 
-| 工作台 `desk` | 纸张 `paper` |
+![Search](docs/images/search.png)
+
+### Filter down to the tool call
+
+Six filters: source, content kind, tool name, project, and date range. Filtering to tool calls is how
+you answer "how did I write that command last time" — the match lands right on the command itself.
+
+![Filtered search](docs/images/search-filters.png)
+
+### Summaries
+
+Browse or search all session summaries. Each shows which model generated it and when, because a
+summary's trustworthiness depends on that.
+
+![Summaries](docs/images/digest.png)
+
+### Ask
+
+Ask in plain language. The LLM rewrites the query and retries — **and every round is shown**, so you
+can tell whether it searched in a sensible direction. Session IDs in the answer are clickable.
+
+![Ask](docs/images/chat.png)
+
+### Timeline
+
+Grouped by project, newest first — useful for "what was I even doing that week".
+
+![Timeline](docs/images/timeline.png)
+
+### Transcript replay
+
+Read the original exchange message by message, tool calls and results included, with the absolute
+path of the source file so you can always get back to the ground truth.
+
+![Transcript replay](docs/images/reader.png)
+
+### Settings
+
+Every config option, rendered from a single declaration in the backend. Options needing a restart say
+so; index options note that they only affect newly indexed content.
+
+![Settings](docs/images/settings.png)
+
+### Collapsible sidebar
+
+Collapses to 46 px with single-character navigation, for when you want the width back.
+
+![Collapsed sidebar](docs/images/sidebar-mini.png)
+
+## Security boundaries
+
+Your transcripts contain configs you `cat`-ed, variables you `env`-ed, tokens you passed to `curl`.
+**The index is a concentrated copy of all that.** So these four are hard constraints with no opt-out,
+each covered by tests:
+
+| Constraint | How it's enforced |
 |---|---|
-| ![desk](docs/images/theme-desk.png) | ![paper](docs/images/theme-paper.png) |
-| **编辑器 `editor`** | **终端 `term`** |
-| ![editor](docs/images/theme-editor.png) | ![term](docs/images/theme-term.png) |
+| **Never writes session files** | Always `os.Open` (`O_RDONLY`). An E2E test byte-compares size / mtime / content of the originals after a full run |
+| **Binds `127.0.0.1` only** | The address is not a config option. An integration test actually dials the LAN IP and fails if it connects |
+| **Index DB is `0600`** | Main DB plus `-wal` / `-shm` all explicitly chmod-ed; directory `0700` |
+| **LLM endpoint must be loopback** | Construction fails outright — no `--allow-remote` escape hatch. Seven negative tests covering remote, LAN, and wildcard addresses |
 
-设置页（所有配置项在界面上改，需重启的会明确标出来）：
+The config file is `0600` too, written via `.tmp → chmod → rename` so a power cut can't leave half a
+JSON behind.
 
-![设置](docs/images/settings-dark.png)
+## This is **not** a backup
 
-## 安全边界
+The index stores *derived* text, not a copy of the original. Measured: 5.9 GB of source transcripts
+became 549 MB of indexed text (~9%). The gap is JSONL structural overhead plus these deliberate losses:
 
-会话记录里有你 `cat` 过的配置、`env` 打过的变量、`curl` 带过的 token。**索引库是这些东西的集中副本**，所以下面四条是硬约束，代码里没有开关，每条都有测试守着：
+- Tool results are **truncated at 4096 bytes** (configurable) — 38 K of 650 K blocks were truncated
+- Images, binaries, and reasoning traces are **not indexed**
+- The `CLAUDE.md` / `AGENTS.md` text injected into every session's first message is **stripped**
 
-| 约束 | 怎么保证的 |
-|---|---|
-| **只读会话文件** | 一律 `os.Open`（`O_RDONLY`）。E2E 测试跑完整流程后逐字节比对原始文件的 size / mtime / 内容 |
-| **只监听 `127.0.0.1`** | 地址不做成配置项。集成测试真的去局域网 IP 上连一次，连得上就算失败 |
-| **索引库 `0600`** | 主库与 `-wal` / `-shm` 都显式 chmod，目录 `0700` |
-| **LLM 端点只允许回环** | 构造即失败，无 `--allow-remote` 之类的逃生口。7 个远端 / 内网 / 通配地址的负例测试 |
+The original `.jsonl` files remain the only source of truth; every record stores their absolute path
+and offset so it can point back. **For backups, use a backup tool.**
 
-配置文件也是 `0600`，写入走 `.tmp → chmod → rename`，断电不会留下半个 JSON。
+## Measured
 
-## 它**不是**备份
-
-索引库存的是**派生文本**，不是原文副本。实测：原始会话 5.9 GB，入库正文 549 MB（约 9%）。差额来自 JSONL 结构开销，以及这些刻意的取舍：
-
-- 工具结果**按 4096 字节截断**（可配），实测 65 万块里 3.8 万块被截
-- 图片、二进制、思考过程等非文本**不入库**
-- 每个会话开头注入的 `CLAUDE.md` / `AGENTS.md` 全文**被剥离**
-
-原始 `.jsonl` 才是唯一事实来源，每条记录都存了它的绝对路径与偏移量以便随时指回去。**要备份请用备份工具。**
-
-## 实测数据
-
-本机真实语料，非合成基准：
+Real corpus on real hardware, not a synthetic benchmark:
 
 | | |
 |---|---|
-| 会话 / 内容块 | 3 176 / 632 322 |
-| 索引库 | 1.0 GB（全量索引 13 分 0 秒） |
-| 检索延迟 | 中位 **23 ms**，20 条真实查询里 19 条 < 260 ms |
-| 最慢查询 | 342 ms（单个 CJK 常用字，命中近十万块的退化情形） |
-| 摘要吞吐 | 中位 0.8 s/会话，全量 3 176 个 **2 小时 13 分**跑完 |
+| Sessions / blocks | 3 176 / 632 322 |
+| Index size | 1.0 GB (full index in 13 min 0 s) |
+| Search latency | median **23 ms**; 19 of 20 real queries under 260 ms |
+| Slowest query | 342 ms — a single common CJK character matching ~100 K blocks |
+| Summary throughput | median 0.8 s/session; all 3 176 done in **2 h 13 min** |
 
-> 截图里的语料是**虚构的演示数据**，不是任何人的真实会话。
-
-## 两套 JSONL 格式不同（写解析器前必读）
+## The two JSONL formats differ (read before writing a parser)
 
 | | Claude Code | Codex |
 |---|---|---|
-| 路径 | `~/.claude/projects/<slug>/<uuid>.jsonl` | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` |
-| 消息位置 | `message.role` | `payload.role`（外层 `type: response_item`） |
-| 文本字段 | `content` 为 str，或 list 中 `type=="text"` | `content` list 中 `type=="input_text"` 的 `text` |
-| 子代理 | 另存 `<uuid>/subagents/agent-*.jsonl` | 同文件内 |
+| Path | `~/.claude/projects/<slug>/<uuid>.jsonl` | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` |
+| Role lives at | `message.role` | `payload.role` (outer `type: response_item`) |
+| Text field | `content` as string, or list items with `type=="text"` | list items with `type=="input_text"` |
+| Subagents | separate `<uuid>/subagents/agent-*.jsonl` | same file |
 
-解析器是可插拔的（`internal/parser` 里实现 `Parser` 接口即可），加第三种格式不用碰索引与检索。
+Parsers are pluggable — implement the `Parser` interface in `internal/parser` and neither the index
+nor the search layer needs to change.
 
-## 为什么没有向量语义检索
+## Why there's no vector search
 
-词汇鸿沟是真的：记忆里是「增量备份」，原文写的是「类似 TimeMachine 的管理工具」，关键词**零命中**。但向量不是唯一解，也未必最优：
+The vocabulary gap is real: you remember "incremental backup", the transcript says "something like
+TimeMachine", and keyword search returns nothing. But vectors aren't the only fix, or necessarily the
+best one:
 
-- **摘要是文本，且用概念词重写原文。** 上例若存有摘要「讨论基于 restic 做增量备份工具」，搜「增量备份」**关键词就命中了**——纯文本手段填平了鸿沟。
-- **LLM agent 会多轮改写查询重试**，向量做不到：它只给一次相似度排名，不会因为结果不对而换个说法再搜。
-- 进程内 embedding 的选型、模型体积、全量向量化耗时、混合排序调参，是全项目最贵的一块。
+- **Summaries are text, and they rephrase in conceptual terms.** With the summary "discussed building
+  an incremental backup tool on restic", searching "incremental backup" **hits via plain keywords**.
+- **The agent rewrites its query and retries.** Vectors can't: they give one similarity ranking and
+  never rephrase because the results looked wrong.
+- In-process embeddings — model choice, binary size, full-corpus vectorization time, hybrid ranking
+  tuning — are the single most expensive piece of this project.
 
-所以这件事被设成**门控**：先攒 10 个真实的「摘要 + agent 改写都没搜到」案例做基准集，解决 ≥8/10 就永久关闭这个需求，否则才重开，并以该基准集验收。代码里没有预埋任何 embedding 表或字段。
+So it's **gated**: collect 10 real cases where summaries *and* agent rewriting both failed. If this
+design solves ≥8 of 10, the requirement is closed permanently; otherwise it reopens and that set
+becomes its acceptance criteria. There is no embedding table or column pre-wired in the code.
 
-## 文档
+## Docs
 
-- [`docs/architecture.md`](docs/architecture.md) —— 架构与九个关键决策**及它们的代价**（含 63.8 s → 276 ms 那次性能事故的完整归因）
-- [`docs/deploy.md`](docs/deploy.md) —— 部署、配置、排查
-- [`docs/design-parity.md`](docs/design-parity.md) —— 界面与设计稿的逐条差异记录
+- [`docs/architecture.md`](docs/architecture.md) — architecture and nine key decisions **with their
+  costs**, including the full post-mortem of a 63.8 s → 276 ms query fix
+- [`docs/deploy.md`](docs/deploy.md) — deployment, configuration, troubleshooting
+- [`docs/design-parity.md`](docs/design-parity.md) — where the UI departs from its design mock, and why
 
-## 许可
+## License
 
-代码 MIT，见 [`LICENSE`](LICENSE)。
+MIT — see [`LICENSE`](LICENSE).
 
-内置字体为 [IBM Plex](https://github.com/IBM/plex)（Sans / Mono），SIL Open Font License 1.1，许可全文在 `internal/dashboard/static/fonts/LICENSE.txt`。字体随二进制打包是刻意的——页面不引用任何外部域名，既保证离线可用，也不向第三方泄露你的浏览行为。
+Bundled fonts are [IBM Plex](https://github.com/IBM/plex) (Sans / Mono) under the SIL Open Font
+License 1.1; full text at `internal/dashboard/static/fonts/LICENSE.txt`. Bundling them is deliberate:
+the page references no external domain, so it works offline and leaks nothing about your browsing to
+a third party.
