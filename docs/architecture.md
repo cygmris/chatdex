@@ -29,7 +29,8 @@
 | `internal/chat` | 多轮工具循环 + 预算 | **不实现检索**，转调 mcpserver.Tools |
 | `internal/mcpserver` | MCP 端点 + 三个工具（唯一一份工具实现） | 不写 SQL |
 | `internal/httpapi` | JSON API + SSE | 不写 SQL |
-| `internal/dashboard` | `embed.FS` 静态资源 | 只读，无写入入口 |
+| `internal/config` | 配置读写 + 字段元信息 + `Live` 热生效 | 不认识 HTTP |
+| `internal/dashboard` | `embed.FS` 静态资源（外壳 + 四套主题 + 六个视图） | 对**会话数据**只读；写入仅限 chatdex 自己的配置 |
 
 ## 关键决策与它们的代价
 
@@ -102,6 +103,39 @@ FTS5 的 `unicode61` 把一整串中文当成一个 token。两个方案在 71.3
 注进页面。给 MCP 与聊天 agent 的文本则走 `StripAll` 全部去掉——
 实测本地模型会把 `\x02 \x03` 原样抄进给用户看的答案里。
 
+### 8. 四套主题 = 同一组 CSS 变量的四组取值
+
+`theme.css` 里 `[data-theme="desk"|"paper"|"editor"|"term"]` 各定义**同一组** token，
+其余样式一律写 `var(--x)`。加一套皮不用碰任何布局代码；反过来，某套主题漏声明一个
+token 会被 `TestThemesDefineSameTokens` 当场拦下，而不是在页面上表现为一处怪颜色。
+
+明暗分两层：顶栏按钮切的是 **mode**（亮 / 暗 / 跟随系统，三态循环），设置页选的是
+**pick**（亮时用哪套 / 暗时用哪套）。合并成一个「五选一」列表的话，「跟随系统」就
+没处安放了。
+
+防闪烁只能靠 `<head>` 里那段内联脚本：外链脚本要等 HTML 解析完才执行，那时浏览器
+已经用默认色画过一帧。它是全站**唯一**允许的内联脚本，`test/e2e/theme_test.go` 断言
+「有且仅有一段、在 head 内、样式表之后、body 之前」。
+
+⚠️ 一个踩过的坑：作者样式表里的 `display` 会盖掉浏览器给 `[hidden]` 的 `display:none`，
+于是 `el.hidden = true` 看着毫无反应。`.filters` 和 `.chat-form` 都中过招
+（后者意味着「LLM 不可用时聊天入口置灰」实际没生效）。现在 layout.css 顶部有一条
+`[hidden] { display: none !important; }` 兜底。
+
+### 9. 配置元信息只声明一次，热生效靠「每次用时取」
+
+`config.Fields()` 是 16 个配置项的唯一声明（key / label / help / kind / hot / min / max /
+options），`GET /api/config` 把它下发给前端渲染整张表单——前端不写第二份字段清单，
+新增配置项只改 `meta.go`。`TestFieldsCoverEveryConfigKey` 反向校验条数，漏一个就失败。
+
+热生效的关键不在保存那一侧，而在**读取**那一侧：`config.Live` 持 `atomic.Pointer[Config]`，
+`summary.Worker` 与 `chat.Agent` 必须每轮从它取值。启动时把 Model 拷成结构体字段的
+那一刻，这个配置项就悄悄变成「需重启」了。真正需重启的四项（两个端口、`db_path`、
+`scan.roots`）在元信息里标 `hot:false`，界面上打角标并给出重启命令，不假装已生效。
+
+保存只写**与默认值不同的键**：文件里永远只有「你改过的东西」，将来调整默认值能自动
+跟随，而不是被一份固化的旧默认值锁死。写入走 `.tmp → chmod 0600 → rename`。
+
 ## 实测数据（2026-07-29，本机真实语料）
 
 | 指标 | 值 |
@@ -122,7 +156,8 @@ FTS5 的 `unicode61` 把一整串中文当成一个 token。两个方案在 71.3
 | 约束 | 实现 | 守住它的测试 |
 |---|---|---|
 | 只读会话文件 | 一律 `os.Open`（`O_RDONLY`） | E2E：跑完整流程后原始文件 size/mtime/内容逐字节相等 |
+| 配置写入路径固定 | 只写 `~/.config/chatdex/config.json`，前端给不了任意路径 | `ConfigStore` 最小接口 + 保存单测（权限 0600、原子写、失败不动原文件） |
 | 只监听 `127.0.0.1` | `const loopback`，地址不做成配置项 | 集成测试真的去本机局域网 IP 上连一次，连得上就失败 |
 | 索引库 `0600` | `Open` 显式 chmod 主库与 `-wal`/`-shm` | 单测 + E2E 双重断言 |
-| LLM 只允许回环 | `requireLoopback`，构造即失败，无开关 | 7 个远端/内网/通配端点的负例 |
+| LLM 只允许回环 | `llm.ValidateEndpoint`，构造即失败，无开关；**保存路径同样过这一关** | 7 个远端/内网/通配端点的负例 + 设置页保存的 3 条负例 |
 | 无向量索引（R8 门控） | 代码里无 embedding 表/列/方法 | `grep -rniE 'embedding\|vector'` 仅命中注释 |

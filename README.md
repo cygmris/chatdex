@@ -7,7 +7,7 @@
 
 ## 形态
 
-照搬 [specloop](../specloop)：**Go 常驻单例 + `systemd --user` + MCP 端点 + 只读 Web dashboard**。
+照搬 [specloop](../specloop)：**Go 常驻单例 + `systemd --user` + MCP 端点 + Web dashboard**。
 
 - 端口块 **5020-5029**（`5021` 前端 / `5022` API+MCP）—— 5010-5019 归 specloop
 - 检索用 **SQLite FTS5 关键词**；**本期不做向量语义检索**（见下）
@@ -15,20 +15,25 @@
 - **会话摘要**：本地 LLM 为每个会话生成一句话摘要，**作为文本一并入 FTS5**
 - 本地 LLM（Ollama）是**可选依赖**，端点仅允许 `127.0.0.1`；不可用时检索照常，只是聊天置灰、缺摘要
 - 索引范围含 **assistant 输出与工具调用/结果**（「上次那条命令怎么写的」只在工具调用里）
-- **只读**：不写、不改、不删任何会话原始文件
+- **只读**：不写、不改、不删任何会话原始文件（dashboard 唯一能写的是 chatdex 自己的配置文件）
 - **只监听 `127.0.0.1`，不可放宽** —— 工具结果里有 `cat`/`env`/`curl` 的明文密钥，索引库等于一份集中的凭证副本
 
 ## 状态
 
-🟢 **已交付**（`session-search` 全部 22 个任务完成）。
+🟢 **已交付**（`session-search` 22 个任务 + `dashboard-redesign` 13 个任务全部完成）。
 
 ```bash
 systemctl --user start chatdex   # 部署见 docs/deploy.md
 xdg-open http://127.0.0.1:5021
 ```
 
-三个视图：**检索**（关键词 + 六项过滤）· **时间线**（按项目聚合）· **问一问**（本地 LLM 多轮检索）。
+五个视图：**检索**（关键词 + 六项过滤）· **时间线**（按项目聚合）· **摘要**（翻/搜 3000+ 条会话摘要）·
+**问一问**（本地 LLM 多轮检索）· **设置**（改配置，多数项即时生效），外加点进任一条目后的**会话回读**。
 另有 MCP 端点 `http://127.0.0.1:5022/mcp` 供 agent 自查历史。
+
+界面四套主题（工作台 / 纸张 / 编辑器 / 终端）可在设置页指派，顶栏按钮在亮 / 暗 / 跟随系统之间
+三态循环；左栏可收起成 46px 单字导航。四套主题的正文与次要文字对比度均达 WCAG AA
+（脚本计算，见 `internal/dashboard/theme_test.go`）。
 
 实测（本机真实语料）：
 
@@ -46,7 +51,8 @@ xdg-open http://127.0.0.1:5021
 specloop 驱动。规范在 `.spec-workflow/specs/session-search/`，审批模式 `auto-with-log`。
 
 ```
-Requirements ✅ → Design ✅ → Tasks ✅ → Implementation ⏳
+session-search      Requirements ✅ → Design ✅ → Tasks ✅ → Implementation ✅
+dashboard-redesign  Requirements ✅ → Design ✅ → Tasks ✅ → Implementation ✅
 ```
 
 ## ⚠️ 核心前置知识：两套 JSONL 格式不同

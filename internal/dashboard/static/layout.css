@@ -172,6 +172,10 @@ button:disabled { opacity: .5; cursor: default; }
 .ghost { background: none; }
 .sm { font-size: 11px; padding: 3px 8px; }
 
+/* 作者样式表里的 display 会盖掉浏览器给 [hidden] 的 display:none，
+ * 于是 el.hidden = true 看着没反应（过滤条在「问一问」「设置」页上就这么漏出来过）。 */
+[hidden] { display: none !important; }
+
 .filters {
   display: flex;
   flex-wrap: wrap;
