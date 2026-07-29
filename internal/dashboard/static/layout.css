@@ -309,3 +309,62 @@ mark {
   overflow: auto;
   color: var(--fg);
 }
+
+/* ---------------- 时间线 ---------------- */
+
+.group { margin-bottom: 18px; }
+.group-head {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  font-size: 12.5px;
+  font-weight: 500;
+  margin: 0 0 5px;
+  padding: 0 11px 4px;
+  border-bottom: 1px solid var(--line);
+}
+
+.tl {
+  display: flex;
+  width: 100%;
+  gap: 10px;
+  align-items: baseline;
+  background: none;
+  border: 0;
+  border-radius: var(--radius);
+  padding: 4px 11px;
+  font-family: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  color: var(--fg-dim);
+  cursor: pointer;
+}
+.tl:hover { background: var(--panel-2); }
+.tl-time, .tl-n { color: var(--fg-faint); font-size: 11px; flex: none; }
+.tl-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tl-label.from-summary { color: var(--fg); }
+
+/* ---------------- 问一问 ---------------- */
+
+.chat { max-width: 900px; padding: 4px 11px; }
+.chat-form { display: flex; gap: 8px; margin-bottom: 14px; }
+.chat-form input { flex: 1; }
+
+.turn {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-2);
+  padding: 10px 12px;
+  margin-bottom: 12px;
+}
+.turn .q { margin-bottom: 6px; }
+.turn .steps { margin: 6px 0; }
+.turn .step { font-size: 11.5px; color: var(--fg-dim); font-family: var(--mono); padding: 1px 0; }
+.turn .step .round { color: var(--accent); }
+.turn .step .args { color: var(--fg); }
+.turn .step .hits { color: var(--hit-fg); }
+.turn .step.note { color: var(--hit-fg); font-family: var(--sans); }
+.turn .a { margin-top: 8px; white-space: pre-wrap; }
+.sess-link { color: var(--accent); }
+
+.digest-lede { padding: 4px 11px 8px; font-size: 11.5px; }

@@ -55,22 +55,25 @@ type Query struct {
 
 // SessionHit 是会话粒度的命中。
 type SessionHit struct {
-	ID          int64   `json:"id"`
-	Source      string  `json:"source"`
-	SessionUID  string  `json:"session_uid"`
-	AgentLabel  string  `json:"agent_label,omitempty"`
-	FilePath    string  `json:"file_path"` // 原始文件绝对路径（需求 3.4）
-	ProjectPath string  `json:"project_path"`
-	StartedAt   int64   `json:"started_at"`
-	EndedAt     int64   `json:"ended_at"`
-	MsgCount    int     `json:"msg_count"`
-	Summary     string  `json:"summary,omitempty"`
-	Score       float64 `json:"score"` // 会话内最佳块的 bm25，越小越相关
-	Hits        int     `json:"hits"`  // 命中数：只展示，**不参与排序**
-	Snippet     string  `json:"snippet"`
-	BestSeq     int     `json:"best_seq"` // 最佳命中块的会话内序号，供跳转
-	BestKind    string  `json:"best_kind"`
-	BestTool    string  `json:"best_tool,omitempty"`
+	ID          int64  `json:"id"`
+	Source      string `json:"source"`
+	SessionUID  string `json:"session_uid"`
+	AgentLabel  string `json:"agent_label,omitempty"`
+	FilePath    string `json:"file_path"` // 原始文件绝对路径（需求 3.4）
+	ProjectPath string `json:"project_path"`
+	StartedAt   int64  `json:"started_at"`
+	EndedAt     int64  `json:"ended_at"`
+	MsgCount    int    `json:"msg_count"`
+	Summary     string `json:"summary,omitempty"`
+	// 摘要是机器写的，可信度取决于「哪个模型、什么时候写的」——需求 3.6
+	SummaryModel string  `json:"summary_model,omitempty"`
+	SummaryAt    int64   `json:"summary_at,omitempty"`
+	Score        float64 `json:"score"` // 会话内最佳块的 bm25，越小越相关
+	Hits         int     `json:"hits"`  // 命中数：只展示，**不参与排序**
+	Snippet      string  `json:"snippet"`
+	BestSeq      int     `json:"best_seq"` // 最佳命中块的会话内序号，供跳转
+	BestKind     string  `json:"best_kind"`
+	BestTool     string  `json:"best_tool,omitempty"`
 }
 
 // BlockHit 是块粒度的命中。
@@ -176,6 +179,7 @@ func (e *Engine) SearchSessions(q Query) (Result, error) {
 WITH f AS MATERIALIZED (`+ftsScoreCTE+`)
 SELECT s.id, s.source, s.session_uid, s.agent_label, s.file_path, s.project_path,
        s.started_at, s.ended_at, s.msg_count, COALESCE(s.summary, ''),
+       s.summary_model, s.summary_at,
        MIN(f.score) AS score, f.bid AS best_bid, COUNT(*) AS hits
 FROM f
 JOIN blocks   b ON b.id = f.bid
@@ -198,6 +202,7 @@ LIMIT ? OFFSET ?`, append(append([]any{match}, args...), limit, offset)...)
 		// 于是 best_bid 就是该会话最相关的那个块。
 		if err := rows.Scan(&h.ID, &h.Source, &h.SessionUID, &h.AgentLabel, &h.FilePath,
 			&h.ProjectPath, &h.StartedAt, &h.EndedAt, &h.MsgCount, &h.Summary,
+			&h.SummaryModel, &h.SummaryAt,
 			&h.Score, &bid, &h.Hits); err != nil {
 			return Result{}, err
 		}
@@ -246,7 +251,8 @@ func (e *Engine) recentSessions(q Query) (Result, error) {
 
 	rows, err := e.db.Query(`
 SELECT s.id, s.source, s.session_uid, s.agent_label, s.file_path, s.project_path,
-       s.started_at, s.ended_at, s.msg_count, COALESCE(s.summary, '')
+       s.started_at, s.ended_at, s.msg_count, COALESCE(s.summary, ''),
+       s.summary_model, s.summary_at
 FROM sessions s
 JOIN blocks b ON b.session_id = s.id
 WHERE s.alive = 1`+where+`
@@ -262,7 +268,8 @@ LIMIT ? OFFSET ?`, append(args, limit, offset)...)
 	for rows.Next() {
 		var h SessionHit
 		if err := rows.Scan(&h.ID, &h.Source, &h.SessionUID, &h.AgentLabel, &h.FilePath,
-			&h.ProjectPath, &h.StartedAt, &h.EndedAt, &h.MsgCount, &h.Summary); err != nil {
+			&h.ProjectPath, &h.StartedAt, &h.EndedAt, &h.MsgCount, &h.Summary,
+			&h.SummaryModel, &h.SummaryAt); err != nil {
 			return Result{}, err
 		}
 		res.Sessions = append(res.Sessions, h)
@@ -361,13 +368,15 @@ func (e *Engine) GetSession(id int64, fromSeq, limit int) (SessionView, error) {
 	var alive int
 	err := e.db.QueryRow(`
 SELECT s.id, s.source, s.session_uid, s.agent_label, s.file_path, s.project_path,
-       s.started_at, s.ended_at, s.msg_count, COALESCE(s.summary,''), s.alive,
+       s.started_at, s.ended_at, s.msg_count, COALESCE(s.summary,''),
+       s.summary_model, s.summary_at, s.alive,
        -- seq>=0 才是对话消息：摘要块存在 seq=-1，它进 FTS 但不进回读列表，
        -- 若计入总数，分页器会多出一页永远空的「下一页」
        (SELECT COUNT(*) FROM blocks WHERE session_id = s.id AND seq >= 0)
 FROM sessions s WHERE s.id = ?`, id).
 		Scan(&v.ID, &v.Source, &v.SessionUID, &v.AgentLabel, &v.FilePath, &v.ProjectPath,
-			&v.StartedAt, &v.EndedAt, &v.MsgCount, &v.Summary, &alive, &v.Total)
+			&v.StartedAt, &v.EndedAt, &v.MsgCount, &v.Summary,
+			&v.SummaryModel, &v.SummaryAt, &alive, &v.Total)
 	if err != nil {
 		return v, err
 	}
