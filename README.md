@@ -7,7 +7,7 @@
 
 ## 形态
 
-照搬 [specloop](../specloop)：**Go 常驻单例 + `systemd --user` + MCP 端点 + Web dashboard**。
+照搬同作者的 specloop：**Go 常驻单例 + `systemd --user` + MCP 端点 + Web dashboard**。
 
 - 端口块 **5020-5029**（`5021` 前端 / `5022` API+MCP）—— 5010-5019 归 specloop
 - 检索用 **SQLite FTS5 关键词**；**本期不做向量语义检索**（见下）
@@ -48,7 +48,9 @@ xdg-open http://127.0.0.1:5021
 
 ## 开发方式
 
-specloop 驱动。规范在 `.spec-workflow/specs/session-search/`，审批模式 `auto-with-log`。
+全程 spec 驱动（Requirements → Design → Tasks → Implementation，每个任务都有实现日志）。
+规范与实现日志留在私有仓，公开仓只放代码与 `docs/`——但每个决策"为什么这么做"
+都沉在 `docs/architecture.md` 与代码注释里，那才是读代码时真正需要的部分。
 
 ```
 session-search      Requirements ✅ → Design ✅ → Tasks ✅ → Implementation ✅
