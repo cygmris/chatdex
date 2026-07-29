@@ -1,38 +1,65 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>chatdex — 会话检索</title>
 <link rel="icon" href="/favicon.svg">
-<link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/theme.css">
+<link rel="stylesheet" href="/layout.css">
+<script>
+/* 全站唯一允许的内联脚本。
+ *
+ * 主题必须在首屏绘制**之前**定下来：外链脚本要等 HTML 解析完才执行，
+ * 那时浏览器已经用默认色画过一帧，暗色用户会看到一下白闪。
+ * 所以这段必须内联在 <head> 里、样式表之后、任何内容之前。
+ *
+ * 主题指派（亮时/暗时各用哪套）来自服务端配置，但首屏来不及请求，
+ * 于是在 localStorage 留一份镜像；/api/config 回来后再校正。 */
+(function () {
+  var d = document.documentElement;
+  try {
+    var mode = localStorage.getItem('chatdex.mode') || 'auto';
+    var pick = JSON.parse(localStorage.getItem('chatdex.themes') || '{}');
+    var dark = mode === 'dark' ||
+      (mode === 'auto' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    d.dataset.mode = mode;
+    d.dataset.theme = dark ? (pick.dark || 'editor') : (pick.light || 'desk');
+    if (localStorage.getItem('chatdex.sidebar') === 'mini') d.dataset.sidebar = 'mini';
+  } catch (e) {
+    d.dataset.mode = 'auto';
+    d.dataset.theme = 'desk';
+  }
+})();
+</script>
+</head>
+<body>
 
-<header>
-  <h1>chatdex</h1>
-  <div id="stats" class="stats">载入中…</div>
-  <div id="summary-bar" class="stats" hidden>
-    <span id="summary-progress"></span>
-    <button id="summary-toggle" class="mini"></button>
-  </div>
-</header>
+<div class="app">
+  <aside class="side" id="side"></aside>
 
-<main>
-  <nav class="tabs">
-    <button id="tab-search" class="tab active">检索</button>
-    <button id="tab-timeline" class="tab">时间线</button>
-    <button id="tab-chat" class="tab">问一问</button>
-  </nav>
+  <main class="main">
+    <header class="topbar">
+      <form id="search-form" class="topbar-form">
+        <input id="q" type="search" placeholder="关键词（中英皆可，如：增量备份 / rsync 部署）" autofocus>
+      </form>
+      <div class="topbar-right">
+        <span id="stats" class="muted"></span>
+        <span id="summary-bar" class="muted" hidden>
+          <span id="summary-progress"></span>
+          <button id="summary-toggle" class="ghost sm" type="button"></button>
+        </span>
+        <button id="theme-btn" class="ghost sm" type="button" title="切换明暗：亮 / 暗 / 跟随系统"></button>
+      </div>
+    </header>
 
-  <section id="search-pane">
-    <form id="search-form">
-      <input id="q" type="search" placeholder="关键词（中英皆可，如：增量备份 / rsync 部署）" autofocus>
-      <button type="submit">检索</button>
-    </form>
-
-    <div class="filters">
-      <select id="source">
+    <div class="filters" id="filters">
+      <select id="source" title="来源">
         <option value="">全部来源</option>
         <option value="claude">Claude Code</option>
         <option value="codex">Codex</option>
       </select>
-      <select id="kind">
+      <select id="kind" title="内容类型">
         <option value="">全部内容类型</option>
         <option value="user">仅我说的</option>
         <option value="assistant">仅助手回答</option>
@@ -41,32 +68,18 @@
         <option value="summary">仅会话摘要</option>
       </select>
       <input id="tool" type="text" placeholder="工具名，如 Bash">
-      <select id="project"><option value="">全部项目</option></select>
       <input id="from" type="date" title="起始日期">
       <input id="to" type="date" title="结束日期">
+      <button id="filters-clear" class="ghost sm" type="button">清空</button>
     </div>
 
-    <div id="results"></div>
-    <div id="timeline"></div>
+    <div class="view" id="view"></div>
+  </main>
+</div>
 
-    <div id="chat" hidden>
-      <p id="chat-unavailable" class="hint" hidden></p>
-      <form id="chat-form">
-        <input id="chat-q" type="text" placeholder="用大白话问，如：我记得做过一个增量备份的项目，在哪个会话？">
-        <button type="submit" id="chat-send">问</button>
-      </form>
-      <div id="chat-log"></div>
-    </div>
-  </section>
-
-  <section id="session-pane" hidden>
-    <div class="session-head">
-      <button id="back">← 返回结果</button>
-      <div id="session-meta"></div>
-    </div>
-    <div id="messages"></div>
-    <div id="pager"></div>
-  </section>
-</main>
-
-<script src="/app.js"></script>
+<script src="/boot.js"></script>
+<script src="/views/reader.js"></script>
+<script src="/views/search.js"></script>
+<script>CD.boot();</script>
+</body>
+</html>

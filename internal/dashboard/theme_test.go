@@ -180,3 +180,28 @@ func TestContrastCasesActuallyRan(t *testing.T) {
 		t.Fatalf("只跑了 %d 套主题", n)
 	}
 }
+
+// layout.css 里不得出现硬编码颜色。
+//
+// 写死一个 #hex，那个元素就会在另外三套主题下失配——而这种失配只在
+// 切到那套主题时才看得见，平时开发根本不会碰到。
+func TestLayoutUsesTokensOnly(t *testing.T) {
+	css := readStatic(t, "layout.css")
+	// 允许注释里出现 #hex（说明性文字），只查真实声明
+	var offenders []string
+	for _, line := range strings.Split(css, "\n") {
+		code := line
+		if i := strings.Index(code, "/*"); i >= 0 {
+			code = code[:i]
+		}
+		if hardColorRe.MatchString(code) {
+			offenders = append(offenders, strings.TrimSpace(line))
+		}
+	}
+	if len(offenders) > 0 {
+		t.Errorf("layout.css 出现硬编码颜色（应改用 var(--x)）:\n  %s",
+			strings.Join(offenders, "\n  "))
+	}
+}
+
+var hardColorRe = regexp.MustCompile(`(#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(|:\s*(red|blue|green|black|white|gray|grey)\b)`)
