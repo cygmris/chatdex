@@ -160,3 +160,44 @@ func (o *Ollama) post(ctx context.Context, path string, body, out any) error {
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
 }
+
+// ModelInfo 是本地可用的一个模型。
+type ModelInfo struct {
+	Name         string   `json:"name"`
+	Capabilities []string `json:"capabilities"`
+}
+
+// Models 列出本地可用于**文本生成**的模型。
+//
+// 刻意过滤掉 embedding-only 的模型（如 bge-m3）：它们不能写摘要也不能聊天，
+// 出现在选项里只会让人选中之后一头雾水。
+func (o *Ollama) Models(ctx context.Context) ([]ModelInfo, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, o.endpoint+"/api/tags", nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := o.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("本地 LLM 不可达: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("本地 LLM 返回 %s", resp.Status)
+	}
+	var out struct {
+		Models []ModelInfo `json:"models"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	var usable []ModelInfo
+	for _, m := range out.Models {
+		for _, c := range m.Capabilities {
+			if c == "completion" {
+				usable = append(usable, m)
+				break
+			}
+		}
+	}
+	return usable, nil
+}

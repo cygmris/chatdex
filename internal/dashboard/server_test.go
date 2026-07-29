@@ -18,8 +18,15 @@ func TestStaticAssetsAreEmbedded(t *testing.T) {
 
 	for _, c := range []struct{ path, want string }{
 		{"/", "chatdex"},
-		{"/app.js", "escHit"},
-		{"/style.css", "--accent"},
+		{"/boot.js", "escHit"},
+		{"/theme.css", "--accent"},
+		{"/layout.css", "var(--bg)"},
+		{"/views/search.js", "register"},
+		{"/views/digest.js", "kind: 'summary'"},
+		{"/views/timeline.js", "register"},
+		{"/views/chat.js", "register"},
+		{"/views/reader.js", "openSession"},
+		{"/fonts/IBMPlexSans-400-latin.woff2", ""},
 	} {
 		resp, err := http.Get(srv.URL + c.path)
 		if err != nil {
@@ -30,7 +37,7 @@ func TestStaticAssetsAreEmbedded(t *testing.T) {
 		if resp.StatusCode != 200 {
 			t.Errorf("%s 状态码 = %d", c.path, resp.StatusCode)
 		}
-		if !strings.Contains(string(body), c.want) {
+		if c.want != "" && !strings.Contains(string(body), c.want) {
 			t.Errorf("%s 内容不含 %q", c.path, c.want)
 		}
 	}

@@ -36,11 +36,21 @@ type Worker struct {
 	Store  *index.Store
 	Engine *search.Engine
 	LLM    llm.Client
-	Model  string
-	// ThrottleMS 是每次生成后的间隔，夜间挂机可设 0。
-	ThrottleMS int
+	// Live 返回当前生效的模型名、限速与启用开关。
+	//
+	// 这里不存 Model/ThrottleMS 字段：拷成字段的那一刻，这两项就变成
+	// 需重启才能改的了，而使用者从设置页上看不出区别（需求 4.3）。
+	Live func() (model string, throttleMS int, enabled bool)
 
 	paused atomic.Bool
+}
+
+// cfg 取当前生效的配置；没接 Live 时（测试）用固定值。
+func (w *Worker) cfg() (string, int, bool) {
+	if w.Live == nil {
+		return "test-model", 0, true
+	}
+	return w.Live()
 }
 
 func (w *Worker) Pause()       { w.paused.Store(true) }
@@ -61,7 +71,8 @@ func (w *Worker) Run(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		if w.Paused() {
+		_, _, enabled := w.cfg()
+		if w.Paused() || !enabled {
 			if sleepCtx(ctx, pausedWait) {
 				return
 			}
@@ -110,7 +121,8 @@ func (w *Worker) Run(ctx context.Context) {
 			slog.Info("摘要完成", "session", id, "耗时", time.Since(start).Round(time.Millisecond))
 		}
 
-		if sleepCtx(ctx, time.Duration(w.ThrottleMS)*time.Millisecond) {
+		_, throttle, _ := w.cfg()
+		if sleepCtx(ctx, time.Duration(throttle)*time.Millisecond) {
 			return
 		}
 	}
@@ -131,6 +143,11 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 	}
 }
 
+// Summarize2 生成并落库，供测试直接驱动一次完整流程。
+func (w *Worker) Summarize2(ctx context.Context, sessionID int64) error {
+	return w.summarizeAndStore(ctx, sessionID)
+}
+
 func (w *Worker) summarizeAndStore(ctx context.Context, sessionID int64) error {
 	text, msgCount, err := w.Summarize(ctx, sessionID)
 	if err != nil {
@@ -139,7 +156,8 @@ func (w *Worker) summarizeAndStore(ctx context.Context, sessionID int64) error {
 	if text == "" {
 		return fmt.Errorf("模型返回空摘要")
 	}
-	return w.Store.SetSummary(sessionID, text, w.Model, msgCount)
+	model, _, _ := w.cfg()
+	return w.Store.SetSummary(sessionID, text, model, msgCount)
 }
 
 // Summarize 为一个会话生成摘要，返回摘要与生成时的消息数。
@@ -175,8 +193,9 @@ func (w *Worker) Summarize(ctx context.Context, sessionID int64) (string, int, e
 }
 
 func (w *Worker) gen(ctx context.Context, system, prompt string) (string, error) {
+	model, _, _ := w.cfg()
 	out, err := w.LLM.Generate(ctx, llm.GenerateRequest{
-		Model: w.Model, System: system, Prompt: prompt, NumPredict: 256,
+		Model: model, System: system, Prompt: prompt, NumPredict: 256,
 	})
 	if err != nil {
 		return "", err

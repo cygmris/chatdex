@@ -40,10 +40,20 @@ type Event struct {
 
 // Agent 是多轮调工具的检索助手。
 type Agent struct {
-	LLM       llm.Client
+	LLM   llm.Client
+	Tools *mcpserver.Tools
+	// Live 返回当前生效的模型与轮次上限（需求 4.3 的热生效）。
+	Live func() (model string, maxRounds int)
+	// Model / MaxRounds 是 Live 未接时的回退（测试用）。
 	Model     string
-	Tools     *mcpserver.Tools
 	MaxRounds int
+}
+
+func (a *Agent) cfg() (string, int) {
+	if a.Live != nil {
+		return a.Live()
+	}
+	return a.Model, a.MaxRounds
 }
 
 // Available 探测本地 LLM 此刻是否就绪。
@@ -54,7 +64,7 @@ func (a *Agent) Available(ctx context.Context) bool { return a.LLM.Available(ctx
 
 // Ask 回答一个问题，过程中的每一步通过 emit 推出去。
 func (a *Agent) Ask(ctx context.Context, question string, emit func(Event)) error {
-	rounds := a.MaxRounds
+	model, rounds := a.cfg()
 	if rounds <= 0 {
 		rounds = defaultMaxRounds
 	}
@@ -66,7 +76,7 @@ func (a *Agent) Ask(ctx context.Context, question string, emit func(Event)) erro
 	budget := toolBudget
 
 	for round := 1; round <= rounds; round++ {
-		resp, err := a.LLM.Chat(ctx, a.Model, msgs, tools)
+		resp, err := a.LLM.Chat(ctx, model, msgs, tools)
 		if err != nil {
 			return err
 		}
@@ -105,7 +115,7 @@ func (a *Agent) Ask(ctx context.Context, question string, emit func(Event)) erro
 	emit(Event{Type: "note", Text: fmt.Sprintf("已达检索轮次上限（%d 轮），根据已有信息作答。", rounds)})
 	msgs = append(msgs, llm.Message{Role: "user",
 		Content: "已达检索轮次上限。请立刻用已有信息作答，不要再调用工具。"})
-	resp, err := a.LLM.Chat(ctx, a.Model, msgs, nil) // 不给工具，逼它收口
+	resp, err := a.LLM.Chat(ctx, model, msgs, nil) // 不给工具，逼它收口
 	if err != nil {
 		return err
 	}

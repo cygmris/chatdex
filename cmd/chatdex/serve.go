@@ -61,6 +61,11 @@ func runServe(args []string) error {
 	// LLM 是可选依赖：配不上或没起来，索引与检索照常，只是没有摘要、聊天置灰。
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	live := config.NewLive(cfg)
+	api.Config = &configStore{
+		live: live, path: *cfgPath, newLLM: llm.NewOllama,
+	}
+
 	client, llmErr := llm.NewOllama(cfg.LLM.Endpoint)
 	if llmErr != nil {
 		// 端点非回环会走到这里：服务照常起，只是没有 LLM 功能
@@ -68,11 +73,14 @@ func runServe(args []string) error {
 		api.ChatUnavailableReason = llmErr.Error()
 	} else {
 		api.Chat = &chat.Agent{
-			LLM: client, Model: cfg.Chat.Model,
-			Tools:     &mcpserver.Tools{Engine: engine},
-			MaxRounds: cfg.Chat.MaxToolRounds,
+			LLM:   client,
+			Tools: &mcpserver.Tools{Engine: engine},
+			Live: func() (string, int) {
+				c := live.Get()
+				return c.Chat.Model, c.Chat.MaxToolRounds
+			},
 		}
-		if w := startSummary(ctx, cfg, st, engine, client); w != nil {
+		if w := startSummary(ctx, live, st, engine, client); w != nil {
 			api.Summary = w
 		}
 	}
@@ -83,7 +91,7 @@ func runServe(args []string) error {
 	mcpserver.Register(mux, engine)
 	dashboard.Register(mux)
 
-	go scanLoop(sc, cfg.Scan.IntervalSec)
+	go scanLoop(sc, live)
 
 	errc := make(chan error, 2)
 	serve := func(ln net.Listener, name string) {
@@ -103,26 +111,32 @@ func listen(port int) (net.Listener, error) {
 }
 
 // startSummary 起摘要后台任务；配置里关掉则返回 nil。
-func startSummary(ctx context.Context, cfg config.Config, st *index.Store, engine *search.Engine, client llm.Client) *summary.Worker {
-	if !cfg.Summary.Enabled {
-		slog.Info("摘要任务已在配置中关闭")
-		return nil
-	}
+// startSummary 起摘要后台任务。模型/限速/启用开关都从 live 每轮重读，
+// 所以设置页改完立刻生效，不需要重启。
+func startSummary(ctx context.Context, live *config.Live, st *index.Store, engine *search.Engine, client llm.Client) *summary.Worker {
 	w := &summary.Worker{
 		Store: st, Engine: engine, LLM: client,
-		Model: cfg.Summary.Model, ThrottleMS: cfg.Summary.ThrottleMS,
+		Live: func() (string, int, bool) {
+			c := live.Get()
+			return c.Summary.Model, c.Summary.ThrottleMS, c.Summary.Enabled
+		},
 	}
 	go w.Run(ctx)
+	cfg := live.Get()
 	slog.Info("摘要任务已启动", "model", cfg.Summary.Model, "throttle_ms", cfg.Summary.ThrottleMS)
 	return w
 }
 
 // scanLoop 后台增量扫描，保持索引最新（需求 5.2）。
-func scanLoop(sc *index.Scanner, intervalSec int) {
-	if intervalSec <= 0 {
-		intervalSec = 30
-	}
+func scanLoop(sc *index.Scanner, live *config.Live) {
 	for {
+		c := live.Get()
+		// 截断阈值与开关也热生效（只影响之后新索引的内容，界面上已标注）
+		sc.Cfg = c.Index
+		intervalSec := c.Scan.IntervalSec
+		if intervalSec <= 0 {
+			intervalSec = 30
+		}
 		rep, err := sc.ScanOnce()
 		if err != nil {
 			slog.Error("扫描失败", "err", err)

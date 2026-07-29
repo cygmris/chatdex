@@ -52,7 +52,7 @@ func newEnv(t *testing.T, reply string) (*index.Store, *summary.Worker, *fakeLLM
 	f := newFakeLLM(reply)
 	w := &summary.Worker{
 		Store: st, Engine: search.NewEngine(st.DB()), LLM: f,
-		Model: "test-model", ThrottleMS: 0,
+		Live: func() (string, int, bool) { return "test-model", 0, true },
 	}
 	return st, w, f
 }
@@ -443,4 +443,38 @@ func TestEnqueueMissingSkipsEmptySessions(t *testing.T) {
 	if p.Pending != 0 {
 		t.Errorf("空会话被入队了: %+v", p)
 	}
+}
+
+// 热生效：改了摘要模型，worker 下一轮取到的就是新值。
+//
+// 如果把 Model 拷成 Worker 的字段，这个配置项就悄悄变成需重启才能改的了——
+// 而使用者从设置页上看不出区别。
+func TestWorkerReadsModelLive(t *testing.T) {
+	st, w, f := newEnv(t, "一句摘要")
+	model := "model-a"
+	w.Live = func() (string, int, bool) { return model, 0, true }
+	id := seed(t, st, "hot", 2)
+
+	text, n, err := w.Summarize(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetSummary(id, text, "model-a", n); err != nil {
+		t.Fatal(err)
+	}
+
+	// 改配置，不重启 worker
+	model = "model-b"
+	id2 := seed(t, st, "hot2", 2)
+	if err := w.Summarize2(context.Background(), id2); err != nil {
+		t.Fatal(err)
+	}
+	var got string
+	if err := st.DB().QueryRow(`SELECT summary_model FROM sessions WHERE id=?`, id2).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got != "model-b" {
+		t.Errorf("摘要记录的模型 = %q，期望 model-b（配置改了但 worker 还在用旧值）", got)
+	}
+	_ = f
 }

@@ -11,7 +11,10 @@ import (
 // 这不是可配置的严格程度：会话内容含工具结果里 cat/env/curl 的明文密钥，
 // 把它发到本机之外就等于泄露一份集中的凭证副本。需求 10.5 写死为不可放宽，
 // 所以这里不提供任何 --allow-remote 之类的开关——远端地址一律构造失败。
-func requireLoopback(endpoint string) error {
+func requireLoopback(endpoint string) error { return ValidateEndpoint(endpoint) }
+
+// ValidateEndpoint 供配置保存路径复用——界面上能填不等于能存。
+func ValidateEndpoint(endpoint string) error {
 	u, err := url.Parse(endpoint)
 	if err != nil {
 		return fmt.Errorf("LLM 端点不是合法 URL: %w", err)

@@ -20,6 +20,7 @@ type Config struct {
 	LLM     LLM          `json:"llm"`
 	Chat    Chat         `json:"chat"`
 	Ports   Ports        `json:"ports"`
+	UI      UI           `json:"ui"`
 
 	// Home 是解析器的家目录，仅测试会改。
 	Home string `json:"home"`
@@ -53,6 +54,13 @@ type Ports struct {
 	API int `json:"api"`
 }
 
+// UI 是跟人走的界面偏好（哪套主题）。
+// 跟浏览器走的状态（当前明暗、左栏、当前视图）在 localStorage，不进这里。
+type UI struct {
+	LightTheme string `json:"light_theme"`
+	DarkTheme  string `json:"dark_theme"`
+}
+
 func Default() Config {
 	home, _ := os.UserHomeDir()
 	return Config{
@@ -62,6 +70,7 @@ func Default() Config {
 		LLM:     LLM{Endpoint: "http://127.0.0.1:11434"},
 		Chat:    Chat{Model: "qwen2.5:7b-instruct", MaxToolRounds: 8},
 		Ports:   Ports{UI: 5021, API: 5022},
+		UI:      UI{LightTheme: "desk", DarkTheme: "editor"},
 		Home:    home,
 		DBPath:  filepath.Join(home, ".local", "share", "chatdex", "index.db"),
 	}

@@ -38,6 +38,8 @@ type Server struct {
 	Chat    Chatter
 	// ChatUnavailableReason 在 Chat 为 nil 时说明原因，前端要显示给用户。
 	ChatUnavailableReason string
+	// Config 可为 nil（理论上不会，留给测试）。
+	Config ConfigStore
 }
 
 // Register 把 API 路由挂到 mux 上。
@@ -54,6 +56,9 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/summary/resume", s.handleSummaryResume)
 	mux.HandleFunc("GET /api/chat/status", s.handleChatStatus)
 	mux.HandleFunc("POST /api/chat", s.handleChat)
+	mux.HandleFunc("GET /api/config", s.handleGetConfig)
+	mux.HandleFunc("PUT /api/config", s.handlePutConfig)
+	mux.HandleFunc("GET /api/llm/models", s.handleModels)
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
