@@ -73,7 +73,7 @@
       </div>`;
 
     root.querySelectorAll('.hit').forEach((el) =>
-      (el.onclick = () => CD.openSession(+el.dataset.id, +el.dataset.seq)));
+      CD.clickable(el, () => CD.openSession(+el.dataset.id, +el.dataset.seq)));
     const prev = CD.$('prev');
     const more = CD.$('more');
     if (prev) prev.onclick = () => { offset = Math.max(0, offset - PAGE); load(); };

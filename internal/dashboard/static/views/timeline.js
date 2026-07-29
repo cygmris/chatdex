@@ -36,7 +36,7 @@
       </section>`).join('');
 
     root.querySelectorAll('.tl').forEach((el) =>
-      (el.onclick = () => CD.openSession(+el.dataset.id, 0)));
+      CD.clickable(el, () => CD.openSession(+el.dataset.id, 0)));
   }
 
   CD.register('timeline', {

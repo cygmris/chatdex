@@ -22,6 +22,20 @@ CD.HIT_CLOSE = '\u0003';
 CD.escHit = (s) =>
   CD.esc(s).split(CD.HIT_OPEN).join('<mark>').split(CD.HIT_CLOSE).join('</mark>');
 
+// 结果条目是 <article> 而不是 <button>（一条结果里有标题、片段、多行元信息，
+// 塞进 button 语义和排版都不对）。于是这里补上键盘那一半：可聚焦 + 回车/空格触发。
+// 只有鼠标能点的列表，等于键盘用户搜到了却打不开。
+CD.clickable = (el, fn) => {
+  el.tabIndex = 0;
+  el.onclick = fn;
+  el.onkeydown = (ev) => {
+    if (ev.key === 'Enter' || ev.key === ' ') {
+      ev.preventDefault();
+      fn();
+    }
+  };
+};
+
 CD.fmtTime = (u) =>
   u ? new Date(u * 1000).toLocaleString('zh-CN', { hour12: false }) : '—';
 
@@ -269,7 +283,14 @@ async function loadStats() {
     const s = await CD.api('/api/stats');
     CD.$('stats').textContent =
       `${s.sessions} 会话 · ${s.blocks} 块 · ${CD.fmtBytes(s.db_bytes)}`;
-    CD.summaryCount = s.summarized || 0;
+    // 回填而不是重新渲染：摘要在后台持续生成，每 10 秒重挂一次视图
+    // 会把正在看的列表滚回顶部
+    if (CD.summaryCount !== (s.summarized || 0)) {
+      CD.summaryCount = s.summarized || 0;
+      const c = CD.$('dg-count');
+      if (c) c.textContent = CD.summaryCount;
+      CD.renderSide();
+    }
     renderSummaryBar(s);
   } catch {
     CD.$('stats').textContent = '索引状态不可用';
@@ -356,3 +377,8 @@ CD.boot = () => {
   loadThemePick();
   setInterval(loadStats, 10000);
 };
+
+// 自己挂而不是让 index.html 写 <script>CD.boot()</script>：
+// 各视图脚本都是同步脚本，DOMContentLoaded 时必已注册完毕，
+// 于是页面里能保持只有防闪烁那一段内联脚本（有测试守着这一点）。
+document.addEventListener('DOMContentLoaded', CD.boot);

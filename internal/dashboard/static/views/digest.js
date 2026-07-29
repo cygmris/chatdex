@@ -33,7 +33,9 @@
     }
 
     root.innerHTML =
-      `<p class="hint digest-lede">共 ${CD.summaryCount} 条摘要。${CD.query.q ? '当前只在摘要文本内匹配。' : '按时间倒序。'}</p>` +
+      // 条数来自 /api/stats，可能还没回来（视图先于它挂载）——
+      // 留个坑给 loadStats 回填，而不是在这里显示一个假的 0
+      `<p class="hint digest-lede">共 <span id="dg-count">${CD.summaryCount || '…'}</span> 条摘要。${CD.query.q ? '当前只在摘要文本内匹配。' : '按时间倒序。'}</p>` +
       list.map((s) => `
         <article class="hit" data-id="${s.id}">
           <p class="sum">${CD.query.q ? CD.escHit(s.snippet) : CD.esc(s.summary)}</p>
@@ -55,7 +57,7 @@
       </div>`;
 
     root.querySelectorAll('.hit').forEach((el) =>
-      (el.onclick = () => CD.openSession(+el.dataset.id, 0)));
+      CD.clickable(el, () => CD.openSession(+el.dataset.id, 0)));
     const p = CD.$('dg-prev');
     const m = CD.$('dg-more');
     if (p) p.onclick = () => { offset = Math.max(0, offset - PAGE); load(); };

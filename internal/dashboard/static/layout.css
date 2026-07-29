@@ -157,6 +157,14 @@ input:focus, select:focus, textarea:focus {
 }
 #q { width: 100%; }
 
+/* 焦点环统一走 accent：浏览器默认的黑色 outline 在暗色主题下几乎看不见，
+ * 而「能聚焦但看不出焦点在哪」和不能聚焦一样没法用。
+ * 用 :focus-visible 而非 :focus，鼠标点击时不出现。 */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 button { cursor: pointer; }
 button:hover { border-color: var(--accent); }
 button:disabled { opacity: .5; cursor: default; }
