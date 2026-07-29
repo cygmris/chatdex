@@ -28,7 +28,7 @@ func TestStripReversesNormalizeIndex(t *testing.T) {
 
 func TestNormalizeSplitsCJKKeepsASCIIWords(t *testing.T) {
 	got := NormalizeQuery("TimeMachine的增量备份 rsync")
-	want := "TimeMachine 的 指 纹 浏 览 器 rsync"
+	want := "TimeMachine 的 增 量 备 份 rsync"
 	if got != want {
 		t.Errorf("NormalizeQuery = %q, want %q", got, want)
 	}
@@ -72,7 +72,7 @@ func TestIndexAndQueryAgreeOnRealFTS5(t *testing.T) {
 		want  int
 	}{
 		{"增量备份", 1},    // 中文整词
-		{"浏览器", 1},      // 中文子串：必须能命中「增量备份」内部
+		{"备份", 1},      // 中文子串：必须能命中「增量备份」内部
 		{"restic", 1}, // 英文
 		{"rsync", 1},    // 命令名
 		{"连接池", 1},      // 另一篇的中文

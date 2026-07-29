@@ -1,2 +1,2 @@
-{"type":"user","timestamp":"2026-07-28T10:00:20.000Z","cwd":"/home/user/demo","sessionId":"agent-aaa111","message":{"role":"user","content":"子代理任务：调研 restic 的 profile 持久化"}}
+{"type":"user","timestamp":"2026-07-28T10:00:20.000Z","cwd":"/home/user/demo","sessionId":"agent-aaa111","message":{"role":"user","content":"子代理任务：调研 restic 的快照仓库能不能增量"}}
 {"type":"assistant","timestamp":"2026-07-28T10:00:30.000Z","cwd":"/home/user/demo","sessionId":"agent-aaa111","message":{"role":"assistant","content":[{"type":"text","text":"launchPersistentContext 不能持久化 session cookie"}]}}

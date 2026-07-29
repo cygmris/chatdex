@@ -17,7 +17,7 @@
 ## 安装
 
 ```bash
-cd ~/projects/chatdex
+cd <仓库目录>
 go build -o ~/.local/bin/chatdex ./cmd/chatdex
 cp deploy/systemd/chatdex.service ~/.config/systemd/user/chatdex.service
 systemctl --user daemon-reload

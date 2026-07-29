@@ -101,7 +101,7 @@ type Result struct {
 //
 // 每个空白分隔的词各成一个短语（引号包裹使 * - : ( 等特殊字符按字面处理），
 // 词与词之间是 AND。CJK 经 NormalizeQuery 切成单字后，短语查询保证它们按序相邻，
-// 于是「浏览器」能命中「增量备份」内部而不会命中散落各处的三个字。
+// 于是「备份」能命中「增量备份」内部而不会命中散落各处的三个字。
 func BuildMatch(text string) string {
 	var phrases []string
 	for _, term := range strings.Fields(text) {

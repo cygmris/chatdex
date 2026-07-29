@@ -107,7 +107,7 @@ func TestClaudeParseBlocks(t *testing.T) {
 	}
 
 	// 首条 user：注入块剥掉，用户真正的提问必须完整保留
-	if blocks[0].Kind != model.KindUser || blocks[0].Body != "做一个类似 timemachine 的 profile 管理工具" {
+	if blocks[0].Kind != model.KindUser || blocks[0].Body != "做一个类似 TimeMachine 的 profile 管理工具" {
 		t.Errorf("首条 user 块 = %+v", blocks[0])
 	}
 

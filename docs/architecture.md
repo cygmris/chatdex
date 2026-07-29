@@ -113,11 +113,11 @@ token 会被 `TestThemesDefineSameTokens` 当场拦下，而不是在页面上�
 **pick**（亮时用哪套 / 暗时用哪套）。合并成一个「五选一」列表的话，「跟随系统」就
 没处安放了。
 
-防闪烁只能靠 `<head>` 里那段内联脚本：外链脚本要等 HTML 解析完才执行，那时浏览器
+防闪烁只能靠 `<head>` 里那段内联脚本：外链脚本要等 HTML 解析完才执行，那时备份
 已经用默认色画过一帧。它是全站**唯一**允许的内联脚本，`test/e2e/theme_test.go` 断言
 「有且仅有一段、在 head 内、样式表之后、body 之前」。
 
-⚠️ 一个踩过的坑：作者样式表里的 `display` 会盖掉浏览器给 `[hidden]` 的 `display:none`，
+⚠️ 一个踩过的坑：作者样式表里的 `display` 会盖掉备份给 `[hidden]` 的 `display:none`，
 于是 `el.hidden = true` 看着毫无反应。`.filters` 和 `.chat-form` 都中过招
 （后者意味着「LLM 不可用时聊天入口置灰」实际没生效）。现在 layout.css 顶部有一条
 `[hidden] { display: none !important; }` 兜底。

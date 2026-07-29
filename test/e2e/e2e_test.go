@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -47,8 +48,8 @@ func start(t *testing.T) env {
 	}
 	claudeFile := filepath.Join(projDir, "sess.jsonl")
 	lines := strings.Join([]string{
-		`{"type":"user","timestamp":"2026-07-28T10:00:00.000Z","cwd":"/home/demo","sessionId":"s1","message":{"role":"user","content":"<system-reminder>注入的 CLAUDE.md</system-reminder>做一个类似 timemachine 的增量备份工具"}}`,
-		`{"type":"assistant","timestamp":"2026-07-28T10:00:05.000Z","cwd":"/home/demo","sessionId":"s1","message":{"role":"assistant","content":[{"type":"text","text":"先确认 restic 的 profile 持久化"},{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"rsync -av /src /dst"}}]}}`,
+		`{"type":"user","timestamp":"2026-07-28T10:00:00.000Z","cwd":"/home/demo","sessionId":"s1","message":{"role":"user","content":"<system-reminder>注入的 CLAUDE.md</system-reminder>做一个类似 TimeMachine 的增量备份工具"}}`,
+		`{"type":"assistant","timestamp":"2026-07-28T10:00:05.000Z","cwd":"/home/demo","sessionId":"s1","message":{"role":"assistant","content":[{"type":"text","text":"先确认 restic 的快照仓库能不能增量"},{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"rsync -av /src /dst"}}]}}`,
 		`{"type":"user","timestamp":"2026-07-28T10:00:06.000Z","cwd":"/home/demo","sessionId":"s1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"sent 1024 bytes"}]}}`,
 	}, "\n") + "\n"
 	if err := os.WriteFile(claudeFile, []byte(lines), 0o644); err != nil {
@@ -133,7 +134,7 @@ func TestSearchThenRead(t *testing.T) {
 		} `json:"sessions"`
 		NoMatch bool `json:"no_match"`
 	}
-	if code := getJSON(e.apiPort, "/api/search?q=%E6%8C%87%E7%BA%B9%E6%B5%8F%E8%A7%88%E5%99%A8", &res); code != 200 {
+	if code := getJSON(e.apiPort, "/api/search?q="+url.QueryEscape("增量备份"), &res); code != 200 {
 		t.Fatalf("检索状态码 = %d", code)
 	}
 	if len(res.Sessions) != 1 {
@@ -162,7 +163,7 @@ func TestSearchThenRead(t *testing.T) {
 		t.Errorf("消息数 = %d, want 4", view.Total)
 	}
 	// 注入的 CLAUDE.md 被剥离，用户真正说的话保留
-	if !strings.Contains(view.Messages[0].Body, "timemachine") {
+	if !strings.Contains(view.Messages[0].Body, "TimeMachine") {
 		t.Errorf("首条消息 = %q", view.Messages[0].Body)
 	}
 	if strings.Contains(view.Messages[0].Body, "注入的") {
@@ -188,7 +189,7 @@ func TestTimeline(t *testing.T) {
 		t.Fatalf("时间线 = %+v", gs)
 	}
 	// 没有摘要（LLM 不可用）时退回首条用户消息
-	if !strings.Contains(gs[0].Sessions[0].Label, "timemachine") {
+	if !strings.Contains(gs[0].Sessions[0].Label, "TimeMachine") {
 		t.Errorf("辨识文字 = %q", gs[0].Sessions[0].Label)
 	}
 

@@ -72,7 +72,7 @@ dashboard-redesign  Requirements ✅ → Design ✅ → Tasks ✅ → Implementa
 
 ## 为什么本期不做向量语义检索
 
-词汇鸿沟是真的：找一段对话时记忆里是「**增量备份**」，原文写的却是「类似 **timemachine** 的管理工具」，关键词搜索**零命中**。
+词汇鸿沟是真的：找一段对话时记忆里是「**增量备份**」，原文写的却是「类似 **TimeMachine** 的管理工具」，关键词搜索**零命中**。
 
 但向量不是唯一解，也未必最优：
 
@@ -82,7 +82,10 @@ dashboard-redesign  Requirements ✅ → Design ✅ → Tasks ✅ → Implementa
 
 所以 R8 设为**门控**：等这套用起来，攒 10 个真实的「还是没搜到」案例做基准集，解决 ≥8/10 就永久关闭，否则才重开并以该基准集验收。
 
-## 相关
+## 许可
 
-- 参考实现：specloop（同作者的 spec 驱动开发服务）
-- 参考实现：`~/projects/specloop`
+代码 MIT，见 `LICENSE`。
+
+内置字体为 [IBM Plex](https://github.com/IBM/plex)（Sans / Mono），SIL Open Font License 1.1，
+许可全文在 `internal/dashboard/static/fonts/LICENSE.txt`。字体随二进制打包是刻意的——
+页面不得引用任何外部域名（离线可用 + 不向第三方泄露浏览行为）。

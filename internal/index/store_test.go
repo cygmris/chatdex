@@ -63,7 +63,7 @@ func TestAppendBlocksIsSearchableViaFTS(t *testing.T) {
 	id := seedSession(t, st, "/tmp/a.jsonl")
 
 	blocks := []model.Block{
-		{Seq: 0, TS: 1000, Kind: model.KindUser, Body: "做一个类似 timemachine 的管理工具"},
+		{Seq: 0, TS: 1000, Kind: model.KindUser, Body: "做一个类似 TimeMachine 的管理工具"},
 		{Seq: 1, TS: 1001, Kind: model.KindToolUse, ToolName: "Bash", ToolUseID: "t1", Body: `{"command":"rsync -av /src /dst"}`},
 		{Seq: 2, TS: 1002, Kind: model.KindToolResult, ToolName: "Bash", ToolUseID: "t1",
 			Truncated: true, RawBytes: 99999, Body: "sent 12 bytes"},

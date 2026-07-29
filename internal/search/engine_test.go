@@ -82,7 +82,7 @@ func TestSessionRankingIgnoresHitCount(t *testing.T) {
 		seed{uid: "noisy-2", project: "/p/a", blocks: repeatBlocks(model.KindToolResult, noise, 45)},
 		seed{uid: "target", project: "/p/b", blocks: []model.Block{
 			{Kind: model.KindUser, Body: target},
-			{Kind: model.KindAssistant, Body: "好，先确认 restic 的 profile 持久化能力"},
+			{Kind: model.KindAssistant, Body: "好，先确认 restic 的快照仓库能不能增量"},
 		}},
 	)
 
@@ -134,7 +134,7 @@ func TestNoMatchIsExplicit(t *testing.T) {
 func TestChineseAndSummaryHit(t *testing.T) {
 	st, e := newEngine(t)
 	seedSessions(t, st, seed{uid: "s1", project: "/p", blocks: []model.Block{
-		{Kind: model.KindUser, Body: "做一个类似 timemachine 的管理工具"},
+		{Kind: model.KindUser, Body: "做一个类似 TimeMachine 的管理工具"},
 		{Kind: model.KindSummary, Body: "讨论基于 restic 做增量备份工具"},
 	}})
 

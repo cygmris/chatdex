@@ -54,7 +54,7 @@ func newAgent(t *testing.T, steps ...llm.ChatResponse) (*chat.Agent, *scriptedLL
 		t.Fatal(err)
 	}
 	if err := st.AppendBlocks(id, []model.Block{
-		{Seq: 0, TS: 1000, Kind: model.KindUser, Body: "做一个类似 timemachine 的管理工具"},
+		{Seq: 0, TS: 1000, Kind: model.KindUser, Body: "做一个类似 TimeMachine 的管理工具"},
 	}, index.Watermark{Size: 1, MTime: 1, Offset: 1}); err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +80,7 @@ func collect(t *testing.T, a *chat.Agent, q string) []chat.Event {
 func TestAgentRetriesWithRewrittenQuery(t *testing.T) {
 	a, f := newAgent(t,
 		llm.ChatResponse{ToolCalls: []llm.ToolCall{{Name: "search_sessions", Args: map[string]any{"query": "增量备份"}}}},
-		llm.ChatResponse{ToolCalls: []llm.ToolCall{{Name: "search_sessions", Args: map[string]any{"query": "timemachine"}}}},
+		llm.ChatResponse{ToolCalls: []llm.ToolCall{{Name: "search_sessions", Args: map[string]any{"query": "TimeMachine"}}}},
 		llm.ChatResponse{Content: "找到了：会话 1，项目 /proj/alpha"},
 	)
 	evs := collect(t, a, "我记得做过一个增量备份的项目")
@@ -125,7 +125,7 @@ func TestAgentRetriesWithRewrittenQuery(t *testing.T) {
 func TestAgentEmitsWhatItSearched(t *testing.T) {
 	a, _ := newAgent(t,
 		llm.ChatResponse{ToolCalls: []llm.ToolCall{{Name: "search_sessions",
-			Args: map[string]any{"query": "timemachine", "source": "claude"}}}},
+			Args: map[string]any{"query": "TimeMachine", "source": "claude"}}}},
 		llm.ChatResponse{Content: "答案"},
 	)
 	evs := collect(t, a, "找找")
@@ -139,7 +139,7 @@ func TestAgentEmitsWhatItSearched(t *testing.T) {
 	if toolEv.Tool != "search_sessions" {
 		t.Fatalf("未推送工具事件: %+v", evs)
 	}
-	if toolEv.Args["query"] != "timemachine" || toolEv.Args["source"] != "claude" {
+	if toolEv.Args["query"] != "TimeMachine" || toolEv.Args["source"] != "claude" {
 		t.Errorf("未带上实际使用的查询与过滤条件: %+v", toolEv.Args)
 	}
 	if toolEv.Round != 1 {
@@ -153,7 +153,7 @@ func TestAgentStopsAtRoundLimit(t *testing.T) {
 	steps := make([]llm.ChatResponse, 20)
 	for i := range steps {
 		steps[i] = llm.ChatResponse{ToolCalls: []llm.ToolCall{
-			{Name: "search_sessions", Args: map[string]any{"query": "timemachine"}}}}
+			{Name: "search_sessions", Args: map[string]any{"query": "TimeMachine"}}}}
 	}
 	a, f := newAgent(t, steps...)
 	a.MaxRounds = 3
@@ -205,7 +205,7 @@ func TestAgentMarksBudgetExhaustion(t *testing.T) {
 		blocks := make([]model.Block, 0, 50)
 		for j := range 50 {
 			blocks = append(blocks, model.Block{Seq: j, Kind: model.KindUser,
-				Body: strings.Repeat("很长的内容 timemachine ", 60)})
+				Body: strings.Repeat("很长的内容 TimeMachine ", 60)})
 		}
 		if err := st.AppendBlocks(id, blocks, index.Watermark{Size: 1, MTime: 1, Offset: 1}); err != nil {
 			t.Fatal(err)
@@ -241,12 +241,12 @@ func TestAgentMarksBudgetExhaustion(t *testing.T) {
 // 工具体必须复用 mcpserver 的实现（需求 10.4）：结果与直接调 MCP 工具一致。
 func TestAgentToolsMatchMCPTools(t *testing.T) {
 	a, _ := newAgent(t,
-		llm.ChatResponse{ToolCalls: []llm.ToolCall{{Name: "search_sessions", Args: map[string]any{"query": "timemachine"}}}},
+		llm.ChatResponse{ToolCalls: []llm.ToolCall{{Name: "search_sessions", Args: map[string]any{"query": "TimeMachine"}}}},
 		llm.ChatResponse{Content: "答案"},
 	)
 	evs := collect(t, a, "找找")
 
-	direct, err := a.Tools.SearchSessions(mcpserver.SearchArgs{Query: "timemachine"})
+	direct, err := a.Tools.SearchSessions(mcpserver.SearchArgs{Query: "TimeMachine"})
 	if err != nil {
 		t.Fatal(err)
 	}

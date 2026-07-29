@@ -11,8 +11,8 @@ import (
 // 吃进去只会把上下文挤爆。
 func TestDistillDropsToolResultBodies(t *testing.T) {
 	msgs := []search.Message{
-		{Kind: "user", Body: "做一个类似 timemachine 的管理工具"},
-		{Kind: "assistant", Body: "先确认 restic 的 profile 持久化能力"},
+		{Kind: "user", Body: "做一个类似 TimeMachine 的管理工具"},
+		{Kind: "assistant", Body: "先确认 restic 的快照仓库能不能增量能力"},
 		{Kind: "tool_use", ToolName: "Bash", Body: `{"command":"rsync -av /a /b"}`},
 		{Kind: "tool_result", ToolName: "Bash", Body: "这里是几十 KB 的构建日志输出，绝不能进摘要输入"},
 		{Kind: "summary", Body: "旧的摘要，也不该被吃进去"},
@@ -25,7 +25,7 @@ func TestDistillDropsToolResultBodies(t *testing.T) {
 	if strings.Contains(got, "旧的摘要") {
 		t.Error("抽稀吃进了旧摘要")
 	}
-	if !strings.Contains(got, "timemachine") || !strings.Contains(got, "restic") {
+	if !strings.Contains(got, "TimeMachine") || !strings.Contains(got, "restic") {
 		t.Errorf("用户与助手的正文丢了: %q", got)
 	}
 	// 工具只留名字，不留入参
@@ -100,7 +100,7 @@ func TestSplitBoundary(t *testing.T) {
 // 「用概念词重写」是摘要能填平词汇鸿沟的关键，提示词里必须写明。
 func TestPromptsRequireConceptualRewrite(t *testing.T) {
 	_, single := SinglePrompt("内容")
-	if !strings.Contains(single, "概念词") || !strings.Contains(single, "timemachine") {
+	if !strings.Contains(single, "概念词") || !strings.Contains(single, "TimeMachine") {
 		t.Error("单次提示词缺少「用概念词重写」的要求与示例")
 	}
 	_, reduce := ReducePrompt([]string{"提要一", "提要二"})

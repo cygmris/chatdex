@@ -70,7 +70,7 @@ func seed(t *testing.T, st *index.Store, uid string, n int) int64 {
 	for i := range n {
 		blocks = append(blocks, model.Block{
 			Seq: i, TS: 1000, Kind: model.KindUser,
-			Body: fmt.Sprintf("第 %d 条：做一个类似 timemachine 的管理工具", i),
+			Body: fmt.Sprintf("第 %d 条：做一个类似 TimeMachine 的管理工具", i),
 		})
 	}
 	if err := st.AppendBlocks(id, blocks, index.Watermark{Size: 1, MTime: 1, Offset: 1}); err != nil {
@@ -97,7 +97,7 @@ func TestSummaryIsSearchableAsText(t *testing.T) {
 	}
 
 	e := search.NewEngine(st.DB())
-	// 「增量备份」只在摘要里出现，原文写的是「类似 timemachine 的管理工具」
+	// 「增量备份」只在摘要里出现，原文写的是「类似 TimeMachine 的管理工具」
 	res, err := e.SearchSessions(search.Query{Text: "增量备份"})
 	if err != nil {
 		t.Fatal(err)
@@ -157,7 +157,7 @@ func TestSummaryDoesNotCreatePhantomPage(t *testing.T) {
 	}
 
 	// 会话元数据里的消息数同样不该含摘要块（检索结果与时间线都显示它）
-	res, err := e.SearchSessions(search.Query{Text: "timemachine"})
+	res, err := e.SearchSessions(search.Query{Text: "TimeMachine"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,7 +263,7 @@ func TestLLMUnavailableDoesNotBlockSearch(t *testing.T) {
 		t.Errorf("LLM 不可用时仍发了 %d 次请求", n)
 	}
 	e := search.NewEngine(st.DB())
-	res, err := e.SearchSessions(search.Query{Text: "timemachine"})
+	res, err := e.SearchSessions(search.Query{Text: "TimeMachine"})
 	if err != nil {
 		t.Fatalf("检索受影响: %v", err)
 	}

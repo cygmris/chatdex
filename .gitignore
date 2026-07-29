@@ -1,1 +1,17 @@
+# 构建产物
 /chatdex
+*.test
+
+# 索引库与运行时数据（含会话正文，绝不入库）
+*.db
+*.db-wal
+*.db-shm
+
+# 测试与覆盖率
+coverage.out
+*.prof
+
+# 编辑器 / 系统
+.idea/
+.vscode/
+.DS_Store
