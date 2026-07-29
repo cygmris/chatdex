@@ -63,9 +63,9 @@ a:hover { text-decoration: underline; }
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 10px 8px 14px;
+  padding: 0 10px 10px 12px;
 }
-.side-head .brand { font-weight: 700; font-size: 13.5px; letter-spacing: -0.01em; }
+.side-head .brand { font-weight: 700; font-size: 15px; letter-spacing: -0.01em; }
 
 .side-tg {
   background: none;
@@ -81,13 +81,14 @@ a:hover { text-decoration: underline; }
 .side-tg:hover { color: var(--fg); border-color: var(--accent); }
 [data-sidebar="mini"] .side-tg { display: block; margin: 0 auto 8px; }
 
+/* 分区标题（视图 / 项目 / 时间）。9.5px + 大字距是把拉丁文小标签那套直接套到
+ * 中文上——中文没有大小写，uppercase 不起作用，只剩"小得看不清"。 */
 .side-sect {
-  font-size: 9.5px;
-  text-transform: uppercase;
-  letter-spacing: 0.09em;
+  font-size: 11px;
+  letter-spacing: 0.02em;
   color: var(--fg-faint);
-  padding: 0 14px;
-  margin: 12px 0 4px;
+  padding: 0 12px;
+  margin: 14px 0 4px;
 }
 
 .side-nav {
@@ -101,17 +102,17 @@ a:hover { text-decoration: underline; }
   border-radius: 0;
   color: var(--fg-dim);
   font-family: inherit;
-  font-size: 11.5px;
+  font-size: 13.5px;
   text-align: left;
-  padding: 5px 14px;
+  padding: 6px 12px;
   cursor: pointer;
 }
 .side-nav .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.side-nav .n { color: var(--fg-faint); font-family: var(--mono); font-size: 10px; flex: none; }
+.side-nav .n { color: var(--fg-faint); font-family: var(--mono); font-size: 11px; flex: none; }
 .side-nav:hover { color: var(--fg); }
 .side-nav.on { background: var(--accent-bg); color: var(--accent); font-weight: 600; }
 .side-nav.clear { color: var(--fg-faint); }
-.side-empty { padding: 2px 14px; color: var(--fg-faint); font-size: 11px; }
+.side-empty { padding: 2px 12px; color: var(--fg-faint); font-size: 12px; }
 
 /* 收起态：中文单字导航 */
 .side-mini {
@@ -121,8 +122,8 @@ a:hover { text-decoration: underline; }
   border: 0;
   color: var(--fg-dim);
   font-family: inherit;
-  font-size: 12.5px;
-  padding: 7px 0;
+  font-size: 14px;
+  padding: 8px 0;
   cursor: pointer;
 }
 .side-mini:hover { color: var(--fg); }
