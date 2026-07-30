@@ -27,6 +27,12 @@ func TestStaticAssetsAreEmbedded(t *testing.T) {
 		{"/views/chat.js", "register"},
 		{"/views/reader.js", "openSession"},
 		{"/fonts/IBMPlexSans-400-latin.woff2", ""},
+		// vendored 第三方库：随二进制打包，不从 CDN 加载（需求 3.6）
+		{"/vendor/marked.min.js", "marked"},
+		{"/vendor/purify.min.js", "DOMPurify"},
+		// 许可文件也要在，否则分发时就少了归属声明（需求 3.7）
+		{"/vendor/LICENSE-marked.txt", "MIT"},
+		{"/vendor/LICENSE-dompurify.txt", "Apache License"},
 	} {
 		resp, err := http.Get(srv.URL + c.path)
 		if err != nil {

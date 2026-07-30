@@ -265,7 +265,7 @@ mark {
 
 .reader-head {
   display: flex;
-  gap: 12px;
+  gap: 8px;
   align-items: flex-start;
   padding: 4px 11px 12px;
   border-bottom: 1px solid var(--line);
@@ -308,6 +308,7 @@ mark {
   font-family: var(--mono);
 }
 .msg-head .role { color: var(--fg); font-family: var(--sans); }
+.msg .md { margin-top: 4px; }
 .msg-head .tool { color: var(--accent); }
 .msg-head .trunc { color: var(--hit-fg); }
 
@@ -377,7 +378,84 @@ mark {
 .turn .step .args { color: var(--fg); }
 .turn .step .hits { color: var(--hit-fg); }
 .turn .step.note { color: var(--hit-fg); font-family: var(--sans); }
-.turn .a { margin-top: 8px; white-space: pre-wrap; }
+.turn .a { margin-top: 8px; }
+
+/* ---------------- ANSI 着色 ---------------- */
+/* 取自主题 token：写死 hex 的话总有一套主题下看不见（见 theme.css 的注释）。 */
+
+.a-black { color: var(--ansi-black); }
+.a-red { color: var(--ansi-red); }
+.a-green { color: var(--ansi-green); }
+.a-yellow { color: var(--ansi-yellow); }
+.a-blue { color: var(--ansi-blue); }
+.a-magenta { color: var(--ansi-magenta); }
+.a-cyan { color: var(--ansi-cyan); }
+.a-white { color: var(--ansi-white); }
+.a-b { font-weight: 700; }
+
+/* ---------------- Markdown 渲染产物（聊天答案 / 会话回读共用） ---------------- */
+/* 沿用既有 token，不引入第二套字号与间距体系。 */
+
+.md > *:first-child { margin-top: 0; }
+.md > *:last-child { margin-bottom: 0; }
+.md p { margin: 0 0 .6em; }
+.md h1, .md h2, .md h3, .md h4 {
+  font-family: var(--title-font);
+  line-height: 1.35;
+  margin: 1em 0 .4em;
+}
+.md h1 { font-size: 1.35em; }
+.md h2 { font-size: 1.2em; }
+.md h3 { font-size: 1.08em; }
+.md h4 { font-size: 1em; }
+.md ul, .md ol { margin: 0 0 .6em; padding-left: 1.5em; }
+.md li { margin: .15em 0; }
+.md li > p { margin: 0; }
+.md code {
+  font-family: var(--mono);
+  font-size: .92em;
+  background: var(--panel-2);
+  border-radius: 3px;
+  padding: 0 .3em;
+}
+.md pre {
+  font-family: var(--mono);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  margin: 0 0 .6em;
+  overflow-x: auto;   /* 长行横向滚动，不撑破布局 */
+}
+.md pre code { background: none; padding: 0; font-size: .95em; }
+.md blockquote {
+  margin: 0 0 .6em;
+  padding: 2px 0 2px 10px;
+  border-left: 2px solid var(--line);
+  color: var(--fg-dim);
+}
+.md table {
+  border-collapse: collapse;
+  margin: 0 0 .6em;
+  display: block;
+  overflow-x: auto;   /* 宽表格自己滚，页面不横向滚 */
+  max-width: 100%;
+}
+.md th, .md td {
+  border: 1px solid var(--line);
+  padding: 4px 8px;
+  text-align: left;
+}
+.md th { background: var(--panel-2); font-weight: 600; }
+.md hr { border: 0; border-top: 1px solid var(--line); margin: 1em 0; }
+.md img { max-width: 100%; }
+/* 渲染失败时的退回：保持原文可读 */
+.md-fallback, .md .md-fallback {
+  font-family: var(--mono);
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+}
 .sess-link { color: var(--accent); }
 
 .digest-lede { padding: 4px 11px 8px; font-size: 11.5px; }

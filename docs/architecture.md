@@ -136,6 +136,56 @@ options），`GET /api/config` 把它下发给前端渲染整张表单——前�
 保存只写**与默认值不同的键**：文件里永远只有「你改过的东西」，将来调整默认值能自动
 跟随，而不是被一份固化的旧默认值锁死。写入走 `.tmp → chmod 0600 → rename`。
 
+### 10. 路由走查询串，不走路径
+
+URL 是「在看什么」的唯一来源；`localStorage` 只留偏好（明暗、主题指派、左栏两态）。
+早先把当前视图存在 localStorage 里，代价是链接分享不出去、后退键直接退出应用、
+两个标签页互相覆盖。
+
+选查询串（`?view=digest&id=17&seq=42`）而不是路径（`/session/17`）的理由是实测的：
+dashboard 的根处理器是 `http.FileServer`，未知路径返回 **404**，要支持路径式路由
+就得在服务端加 SPA 兜底。查询串则服务端一行不动。
+
+两处易错，都有测试守着：
+
+- **`switchView` 与 `mountView` 必须分开**。前者是「用户点了导航」会写历史，后者是
+  「按状态渲染」不碰 URL。不分开的话，`popstate` 里调用会再 push 一次，与浏览器
+  自己的历史打架。
+- **回读是覆盖层不是视图**，所以 URL 里是「底层视图 + id/seq」。这样「关掉回读回哪」
+  由 URL 自己表达，不用另存 back 状态。⚠️ 实测踩过：`apply` 里若先挂底层视图再开回读，
+  两个异步 fetch 会互相覆盖——检索结果回来得晚就把回读内容顶掉了。所以 URL 带 `id` 时
+  根本不挂底层视图的内容。
+
+### 11. Markdown 必须配消毒，这是量出来的
+
+会话内容是敌意输入：里面有抓过的网页、`cat` 过的文件、工具吐出的任意字节。
+实测 `marked.parse()` 的裸输出：
+
+```html
+<h1>Hi</h1>
+<script>alert(1)</script>
+<img src=x onerror=alert(2)>
+<p><a href="javascript:alert(3)">click</a></p>
+<iframe src=//evil></iframe>
+```
+
+四种攻击全部原样透传。所以 DOMPurify 不是「加固」，是管线里**不可省的一环**：
+`marked.parse → DOMPurify.sanitize → DOM`，URI 白名单收紧到 http/https/mailto。
+
+选型也是量出来的（自己下下来量，不引用聚合站互相矛盾的数字）：marked 38 KB
+（markdown-it 121 KB，插件生态这里用不上；snarkdown 2 KB 但不支持表格，而实测
+3 482 个 assistant 块有表格）+ DOMPurify 28 KB，合计 69 KB，对比字体 512 KB 可忽略。
+
+**ANSI 只做 SGR，自写 45 行**：实测 673 286 块里只有 1 274 块（0.19%）含转义序列，
+这个比例不值得引终端模拟器，也不值得引一个 MPL-2.0 的依赖。其中 1 136 块是
+`tool_result`（上色），**140 块是 `user`**——多是 Claude Code 自己的界面文本被一并
+存下来，它们走 Markdown 路径，所以在 `CD.md` 入口把 ANSI **剥掉**而不是上色：
+上色要先产出 HTML，HTML 再喂给 Markdown 解析器就乱套了。
+
+⚠️ 渲染前后有两条同源纪律：**先转义、再加标记**。`escHit` 如此，`CD.ansi` 如此；
+而给已渲染的 HTML 加会话号链接时反过来——**不能对 HTML 串做正则替换**（会打断标签），
+必须遍历文本节点。
+
 ## 实测数据（2026-07-29，本机真实语料）
 
 | 指标 | 值 |

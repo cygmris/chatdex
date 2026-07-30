@@ -22,11 +22,6 @@
     return parts.join(' · ');
   }
 
-  // 模型的写法五花八门：「会话 12」「会话 id: 12」「会话 ID：12」「#12」都要能点
-  const linkify = (text) =>
-    CD.esc(text).replace(/(?:会话\s*(?:id)?\s*[:：]?\s*#?|#)(\d+)/gi,
-      (m, id) => `<a href="#" class="sess-link" data-id="${id}">${m}</a>`);
-
   async function mount(el) {
     root = el;
     root.innerHTML = `
@@ -73,7 +68,7 @@
     const log = CD.$('chat-log');
     const turn = document.createElement('div');
     turn.className = 'turn';
-    turn.innerHTML = `<div class="q">${CD.esc(question)}</div><div class="steps"></div><div class="a"></div>`;
+    turn.innerHTML = `<div class="q">${CD.esc(question)}</div><div class="steps"></div><div class="a md"></div>`;
     log.prepend(turn);
     const steps = turn.querySelector('.steps');
     const answer = turn.querySelector('.a');
@@ -120,7 +115,8 @@
           n.textContent = e.text;
           steps.append(n);
         } else if (e.type === 'answer') {
-          answer.innerHTML = linkify(e.text || '（无内容）');
+          answer.innerHTML = CD.md(e.text || '（无内容）');
+          CD.linkifySessions(answer);
           answer.querySelectorAll('.sess-link').forEach((el) =>
             (el.onclick = (ev) => { ev.preventDefault(); CD.openSession(+el.dataset.id, 0); }));
         }

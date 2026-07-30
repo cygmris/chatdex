@@ -48,6 +48,8 @@ chatdex has a specific answer to each, with measured numbers behind it — see
 | 🧠 **Summaries are indexed too** | A local LLM writes one line per session, **rephrasing in conceptual terms** — which is what closes the vocabulary gap above |
 | 💬 **Ask** | Ask in plain language; the LLM rewrites its query and retries across rounds, and **shows you every query it tried** |
 | 🕘 **Timeline & transcript replay** | Grouped by project; click through to read the original exchange, paginated for long sessions |
+| 📝 **Markdown & ANSI rendering** | Assistant output renders as Markdown; ANSI colours in command output are coloured. One click switches the transcript back to **raw bytes** |
+| 🔗 **Shareable links** | View, query, every filter, and the session you're reading all live in the URL — send it to someone and they get the same result. The back button works too |
 | 🔌 **MCP endpoint** | Your agent can look up "how did I solve this last time" by itself |
 | 🎨 **Four themes** | Light/dark/follow-system, all contrast ratios verified against WCAG AA by script |
 | ⚙️ **Settings UI** | Change config in the browser; most options take effect immediately |
@@ -141,8 +143,10 @@ Grouped by project, newest first — useful for "what was I even doing that week
 
 ### Transcript replay
 
-Read the original exchange message by message, tool calls and results included, with the absolute
-path of the source file so you can always get back to the ground truth.
+Read the original exchange message by message. Assistant output renders as Markdown, ANSI colours
+in command output are coloured, and tool-call JSON is left alone. One click switches to **raw** —
+this is a forensic tool, and sometimes the exact stored bytes are the point. The session id lives in
+the URL, so reloading or sharing lands in the same place.
 
 ![Transcript replay](docs/images/reader.png)
 
@@ -243,3 +247,8 @@ Bundled fonts are [IBM Plex](https://github.com/IBM/plex) (Sans / Mono) under th
 License 1.1; full text at `internal/dashboard/static/fonts/LICENSE.txt`. Bundling them is deliberate:
 the page references no external domain, so it works offline and leaks nothing about your browsing to
 a third party.
+
+Markdown rendering uses two libraries, also bundled (and likewise referencing no external domain):
+[marked](https://github.com/markedjs/marked) (MIT) and
+[DOMPurify](https://github.com/cure53/DOMPurify) (Apache-2.0 / MPL-2.0).
+Full license texts live in `internal/dashboard/static/vendor/`.

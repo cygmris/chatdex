@@ -36,6 +36,8 @@ chatdex 对这四条各有对策，且都有实测数字撑着——见 [`docs/a
 | 🧠 **摘要一并入索引** | 本地 LLM 给每个会话写一句话摘要，**用概念词重写原文**——这正是填平上面那条词汇鸿沟的手段 |
 | 💬 **问一问** | 用大白话提问，LLM 多轮改写查询自己重试，并**把每一轮搜了什么都摊开给你看** |
 | 🕘 **时间线与会话回读** | 按项目聚合；点进去逐条回读原始对话，长会话分页 |
+| 📝 **Markdown 与 ANSI 渲染** | assistant 输出按 Markdown 显示，命令输出的颜色码正确上色；回读页可一键切回**原文**看原始字节 |
+| 🔗 **可分享的链接** | 视图、检索词、全部过滤条件、正在读的会话都在 URL 里——发给别人能还原同样的结果，后退键也照常用 |
 | 🔌 **MCP 端点** | agent 可以自己查「我上次是怎么解决这个的」 |
 | 🎨 **四套主题** | 亮 / 暗 / 跟随系统，四套配色的对比度全部由脚本验证达到 WCAG AA |
 | ⚙️ **设置页** | 配置项在浏览器里改，多数即时生效 |
@@ -125,7 +127,9 @@ ollama pull qwen2.5:7b-instruct
 
 ### 会话回读
 
-逐条回读原始对话，含工具调用与结果，并给出源文件的绝对路径，随时能回到事实来源。
+逐条回读原始对话。assistant 的输出按 Markdown 渲染、命令输出的 ANSI 颜色正确上色，
+工具调用的 JSON 保持原样。左上角一键切「原文」看索引时存下的原始字节——这是取证工具，
+看到原始字节有时才是重点。地址栏里带着会话号，刷新与分享都能回到同一处。
 
 ![会话回读](docs/images/reader.png)
 
@@ -218,3 +222,8 @@ ollama pull qwen2.5:7b-instruct
 内置字体为 [IBM Plex](https://github.com/IBM/plex)（Sans / Mono），SIL Open Font License 1.1，
 许可全文在 `internal/dashboard/static/fonts/LICENSE.txt`。字体随二进制打包是刻意的——
 页面不引用任何外部域名，既保证离线可用，也不向第三方泄露你的浏览行为。
+
+渲染 Markdown 用到两个随二进制打包的库（同样不引用任何外部域名）：
+[marked](https://github.com/markedjs/marked)（MIT）与
+[DOMPurify](https://github.com/cure53/DOMPurify)（Apache-2.0 / MPL-2.0），
+许可全文在 `internal/dashboard/static/vendor/`。

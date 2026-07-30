@@ -201,6 +201,17 @@
 
 /* ---- 工作台（亮）：默认亮色主题 ---- */
 [data-theme="desk"] {
+  /* ANSI 16 色的前 8 色。亮色主题下「黄」必须压暗、「白」必须变灰，
+   * 否则在近白底上根本看不见——终端配色不能照搬到网页背景上。 */
+  --ansi-black: #33352f;
+  --ansi-red: #b3261e;
+  --ansi-green: #1a6b3c;
+  --ansi-yellow: #7a5c00;
+  --ansi-blue: #1c4fa1;
+  --ansi-magenta: #8e2f97;
+  --ansi-cyan: #0f5f6b;
+  --ansi-white: #5f6368;
+
   --bg: #fbfbfa;
   --panel: #f4f4f2;
   --panel-2: #ffffff;
@@ -222,6 +233,16 @@
 
 /* ---- 纸张（亮）：摘要走衬线，圆角更硬 ---- */
 [data-theme="paper"] {
+  /* 纸张偏暖，ANSI 也跟着偏暖一档 */
+  --ansi-black: #3a352c;
+  --ansi-red: #a8321f;
+  --ansi-green: #1f6638;
+  --ansi-yellow: #7a5500;
+  --ansi-blue: #23508f;
+  --ansi-magenta: #85307f;
+  --ansi-cyan: #145c63;
+  --ansi-white: #66625a;
+
   --bg: #faf7f0;
   --panel: #f3efe4;
   --panel-2: #ffffff;
@@ -243,6 +264,16 @@
 
 /* ---- 编辑器（暗）：默认暗色主题 ---- */
 [data-theme="editor"] {
+  /* 暗色主题反过来：「黑」必须提亮成灰，否则在近黑底上看不见 */
+  --ansi-black: #7c8496;
+  --ansi-red: #ff7b72;
+  --ansi-green: #7ee2a8;
+  --ansi-yellow: #e9c46a;
+  --ansi-blue: #85b8ff;
+  --ansi-magenta: #d9a6f2;
+  --ansi-cyan: #78dce8;
+  --ansi-white: #e3e6ec;
+
   --bg: #16181d;
   --panel: #1a1d23;
   --panel-2: #1e222a;
@@ -264,6 +295,16 @@
 
 /* ---- 终端（暗）：摘要也走等宽 ---- */
 [data-theme="term"] {
+  /* 终端主题整体偏绿，ANSI 也压一点绿调 */
+  --ansi-black: #6f7d73;
+  --ansi-red: #ff8a80;
+  --ansi-green: #7fe08a;
+  --ansi-yellow: #e6cb6b;
+  --ansi-blue: #8fbcf0;
+  --ansi-magenta: #dda5e6;
+  --ansi-cyan: #74d9d0;
+  --ansi-white: #d6e0d8;
+
   --bg: #0d0f0e;
   --panel: #111413;
   --panel-2: #141817;

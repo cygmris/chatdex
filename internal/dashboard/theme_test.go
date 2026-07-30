@@ -42,6 +42,43 @@ func TestThemesDefineSameTokens(t *testing.T) {
 //
 // 正文 4.5:1、次要文字 4.5:1（都是正文尺寸，不适用大字的 3:1 放宽）。
 // 不达标就调 token，不是放宽标准。
+// ANSI 颜色是**装饰性着色**（给命令输出上色），不承担正文阅读，
+// 所以按 WCAG 的非正文标准 3:1 要求，而不是正文的 4.5:1。
+// 但必须可辨——终端配色照搬到网页背景上，亮色主题下的「黄」和「白」
+// 会直接消失，这个测试就是拦这个的。
+func TestANSIColorsAreLegible(t *testing.T) {
+	themes := parseThemes(t)
+	names := []string{
+		"--ansi-black", "--ansi-red", "--ansi-green", "--ansi-yellow",
+		"--ansi-blue", "--ansi-magenta", "--ansi-cyan", "--ansi-white",
+	}
+	var checked int
+	for theme, tokens := range themes {
+		for _, n := range names {
+			fg, ok := parseHex(tokens[n])
+			if !ok {
+				t.Errorf("主题 %s 缺 %s", theme, n)
+				continue
+			}
+			// 正文区与代码块两种底色都要可辨
+			for _, bgName := range []string{"--bg", "--panel-2"} {
+				bg, ok := parseHex(tokens[bgName])
+				if !ok {
+					continue
+				}
+				if r := contrast(fg, bg); r < 3.0 {
+					t.Errorf("主题 %s 的 %s 对 %s 只有 %.2f:1（需 ≥3:1）", theme, n, bgName, r)
+				}
+				checked++
+			}
+		}
+	}
+	// 防止 parseThemes 返回空导致这个测试变成一句空话
+	if want := 4 * 8 * 2; checked != want {
+		t.Errorf("只校验了 %d 组，期望 %d 组（四套主题 × 8 色 × 2 种底色）", checked, want)
+	}
+}
+
 func TestThemeContrastMeetsWCAG_AA(t *testing.T) {
 	themes := parseThemes(t)
 

@@ -23,7 +23,7 @@ func seedSession(t *testing.T, st *Store, path string) int64 {
 	t.Helper()
 	id, err := st.UpsertSession(model.SessionMeta{
 		Source: model.SourceClaude, SessionUID: "uuid-1", FilePath: path,
-		ProjectPath: "/home/user/projects/chatdex", StartedAt: 1000,
+		ProjectPath: "/home/user/workflow/cygmris/chatdex", StartedAt: 1000,
 	})
 	if err != nil {
 		t.Fatal(err)
