@@ -184,6 +184,11 @@ func (s *Scanner) indexFile(p parser.Parser, path string, rep *Report) error {
 		return err
 	}
 
+	// 标题是 Parse 才知道的；空值不写（见 SetTitle 的注释）
+	if err := s.Store.SetTitle(id, cur.Title); err != nil {
+		slog.Warn("记录会话名失败", "path", path, "err", err)
+	}
+
 	rep.FilesIndexed++
 	rep.BlocksAdded += len(blocks)
 	rep.LinesSkipped += cur.Skipped

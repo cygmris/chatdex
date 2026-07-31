@@ -66,6 +66,11 @@ CREATE TRIGGER IF NOT EXISTS blocks_au AFTER UPDATE ON blocks BEGIN
     INSERT INTO blocks_fts(rowid, body) VALUES (new.id, new.body);
 END;
 
+CREATE TABLE IF NOT EXISTS meta (
+    k TEXT PRIMARY KEY,
+    v TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS summary_queue (
     session_id INTEGER PRIMARY KEY REFERENCES sessions(id),
     priority   INTEGER NOT NULL DEFAULT 1,      -- 0 新会话优先 / 1 历史批量
@@ -84,6 +89,7 @@ CREATE INDEX IF NOT EXISTS summary_queue_pick ON summary_queue(state, priority, 
 // 每条执行时忽略「列已存在」错误，于是重复运行是安全的。
 var migrations = []string{
 	`ALTER TABLE sessions ADD COLUMN summary_msg_count INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE sessions ADD COLUMN title TEXT NOT NULL DEFAULT ''`,
 }
 
 // repairs 是每次启动都跑一遍的数据自愈语句。

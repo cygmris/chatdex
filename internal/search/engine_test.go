@@ -302,3 +302,39 @@ func TestProjectsAggregation(t *testing.T) {
 		t.Errorf("项目聚合 = %v", got)
 	}
 }
+
+// 会话名不进 FTS（需求 4.1）。
+//
+// 它只有 2% 覆盖率，为它动索引结构（重建 FTS 表、改三个触发器）代价远大于收益。
+// 这条断言防的是「顺手也加进去吧」——那个改动一旦做了就很难退回来。
+func TestTitleIsNotFullTextIndexed(t *testing.T) {
+	st, e := newEngine(t)
+	seedSessions(t, st, seed{uid: "s1", project: "/p", blocks: []model.Block{
+		{Kind: model.KindUser, Body: "正文里完全没有那个词"},
+	}})
+	var id int64
+	if err := st.DB().QueryRow(`SELECT id FROM sessions LIMIT 1`).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	const title = "独一无二的会话名XYZ"
+	if err := st.SetTitle(id, title); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := e.SearchSessions(search.Query{Text: title})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Sessions) != 0 {
+		t.Errorf("按会话名搜到了 %d 条 —— 标题不该进 FTS（需求 4.1）", len(res.Sessions))
+	}
+
+	// 但它必须能随会话一起被读出来
+	got, err := e.SearchSessions(search.Query{Text: "正文里"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Sessions) != 1 || got.Sessions[0].Title != title {
+		t.Errorf("会话名没随结果返回：%+v", got.Sessions)
+	}
+}

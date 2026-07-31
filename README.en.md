@@ -47,6 +47,7 @@ chatdex has a specific answer to each, with measured numbers behind it — see
 | 🔍 **Mixed CJK/ASCII full-text search** | Per-character CJK splitting over FTS5. Median latency **23 ms** on a real 3 176-session / 632 K-block corpus |
 | 🧠 **Summaries are indexed too** | A local LLM writes one line per session, **rephrasing in conceptual terms** — which is what closes the vocabulary gap above |
 | 💬 **Ask** | Ask in plain language; the LLM rewrites its query and retries across rounds, and **shows you every query it tried** |
+| 🏷 **Session names** | A name you set with `/rename` takes precedence over the LLM summary — what you called it beats what a model guessed |
 | 🕘 **Timeline & transcript replay** | Grouped by project; click through to read the original exchange, paginated for long sessions |
 | 📝 **Markdown & ANSI rendering** | Assistant output renders as Markdown; ANSI colours in command output are coloured. One click switches the transcript back to **raw bytes** |
 | 🔗 **Shareable links** | View, query, every filter, and the session you're reading all live in the URL — send it to someone and they get the same result. The back button works too |

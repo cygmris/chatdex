@@ -36,7 +36,10 @@ type claudeRecord struct {
 	Timestamp string `json:"timestamp"`
 	CWD       string `json:"cwd"`
 	SessionID string `json:"sessionId"`
-	Message   struct {
+	// 会话名：/rename 写 customTitle，agent 自动命名写 agentName
+	CustomTitle string `json:"customTitle"`
+	AgentName   string `json:"agentName"`
+	Message     struct {
 		Role    string          `json:"role"`
 		Content json.RawMessage `json:"content"`
 	} `json:"message"`
@@ -133,6 +136,7 @@ func (c Claude) Parse(r io.Reader, start Cursor, emit func(model.Block) error) (
 	toolNames := map[string]string{} // tool_use_id -> 工具名，供 tool_result 回填
 	// 续读时首条 user 消息早已处理过，不能再走兜底截断路径
 	sawUser := start.Offset > 0
+	var customTitle, agentName string
 
 	off, err := scanLines(r, start.Offset, func(line []byte) error {
 		var rec claudeRecord
@@ -141,6 +145,19 @@ func (c Claude) Parse(r io.Reader, start Cursor, emit func(model.Block) error) (
 			return nil
 		}
 		if rec.Type != "user" && rec.Type != "assistant" {
+			// 这两类仍然不是消息、不进 blocks，但它们带着会话名，顺手记下。
+			// 同一文件里会出现很多次（用户改名 / agent 重命名都会追加），
+			// 取最后一次——最后那个才是他要的名字。
+			switch rec.Type {
+			case "custom-title":
+				if rec.CustomTitle != "" {
+					customTitle = rec.CustomTitle
+				}
+			case "agent-name":
+				if rec.AgentName != "" {
+					agentName = rec.AgentName
+				}
+			}
 			if !ignorableTypes[rec.Type] {
 				slog.Warn("claude: 未知记录类型，已跳过", "type", rec.Type)
 			}
@@ -162,6 +179,12 @@ func (c Claude) Parse(r io.Reader, start Cursor, emit func(model.Block) error) (
 		return nil
 	})
 	cur.Offset = off
+	// 人写的名字胜过机器起的
+	if customTitle != "" {
+		cur.Title = customTitle
+	} else if agentName != "" {
+		cur.Title = agentName
+	}
 	return cur, err
 }
 

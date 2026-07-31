@@ -20,6 +20,12 @@ type Cursor struct {
 	Offset  int64
 	Seq     int
 	Skipped int // 累计跳过的坏行数，供排查
+
+	// Title 是解析过程中顺带学到的会话名（Claude 的 /rename 或 agent 自动命名）。
+	// 放在这里而不是 Meta 里：Meta 只读文件头 50 行，而标题记录散落全文——
+	// 只有 Parse 会逐行走完，顺手记下不额外读一遍文件。
+	// Codex 侧无此记录，恒为空。
+	Title string
 }
 
 // Parser 是一种 agent 工具的会话格式解析器。

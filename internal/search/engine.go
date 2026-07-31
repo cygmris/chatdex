@@ -64,7 +64,9 @@ type SessionHit struct {
 	StartedAt   int64  `json:"started_at"`
 	EndedAt     int64  `json:"ended_at"`
 	MsgCount    int    `json:"msg_count"`
-	Summary     string `json:"summary,omitempty"`
+	// Title 是用户 /rename 的名字或 agent 自动生成的——人写的，可信度高于机器摘要
+	Title   string `json:"title,omitempty"`
+	Summary string `json:"summary,omitempty"`
 	// 摘要是机器写的，可信度取决于「哪个模型、什么时候写的」——需求 3.6
 	SummaryModel string  `json:"summary_model,omitempty"`
 	SummaryAt    int64   `json:"summary_at,omitempty"`
@@ -179,7 +181,7 @@ func (e *Engine) SearchSessions(q Query) (Result, error) {
 WITH f AS MATERIALIZED (`+ftsScoreCTE+`)
 SELECT s.id, s.source, s.session_uid, s.agent_label, s.file_path, s.project_path,
        s.started_at, s.ended_at, s.msg_count, COALESCE(s.summary, ''),
-       s.summary_model, s.summary_at,
+       s.summary_model, s.summary_at, s.title,
        MIN(f.score) AS score, f.bid AS best_bid, COUNT(*) AS hits
 FROM f
 JOIN blocks   b ON b.id = f.bid
@@ -202,7 +204,7 @@ LIMIT ? OFFSET ?`, append(append([]any{match}, args...), limit, offset)...)
 		// 于是 best_bid 就是该会话最相关的那个块。
 		if err := rows.Scan(&h.ID, &h.Source, &h.SessionUID, &h.AgentLabel, &h.FilePath,
 			&h.ProjectPath, &h.StartedAt, &h.EndedAt, &h.MsgCount, &h.Summary,
-			&h.SummaryModel, &h.SummaryAt,
+			&h.SummaryModel, &h.SummaryAt, &h.Title,
 			&h.Score, &bid, &h.Hits); err != nil {
 			return Result{}, err
 		}
@@ -252,7 +254,7 @@ func (e *Engine) recentSessions(q Query) (Result, error) {
 	rows, err := e.db.Query(`
 SELECT s.id, s.source, s.session_uid, s.agent_label, s.file_path, s.project_path,
        s.started_at, s.ended_at, s.msg_count, COALESCE(s.summary, ''),
-       s.summary_model, s.summary_at
+       s.summary_model, s.summary_at, s.title
 FROM sessions s
 JOIN blocks b ON b.session_id = s.id
 WHERE s.alive = 1`+where+`
@@ -269,7 +271,7 @@ LIMIT ? OFFSET ?`, append(args, limit, offset)...)
 		var h SessionHit
 		if err := rows.Scan(&h.ID, &h.Source, &h.SessionUID, &h.AgentLabel, &h.FilePath,
 			&h.ProjectPath, &h.StartedAt, &h.EndedAt, &h.MsgCount, &h.Summary,
-			&h.SummaryModel, &h.SummaryAt); err != nil {
+			&h.SummaryModel, &h.SummaryAt, &h.Title); err != nil {
 			return Result{}, err
 		}
 		res.Sessions = append(res.Sessions, h)
@@ -352,6 +354,7 @@ type Message struct {
 
 // SessionView 是一个会话的回读视图（需求 3）。
 type SessionView struct {
+	Title string `json:"title,omitempty"`
 	SessionHit
 	Alive    bool      `json:"alive"`
 	Total    int       `json:"total"`
@@ -369,14 +372,14 @@ func (e *Engine) GetSession(id int64, fromSeq, limit int) (SessionView, error) {
 	err := e.db.QueryRow(`
 SELECT s.id, s.source, s.session_uid, s.agent_label, s.file_path, s.project_path,
        s.started_at, s.ended_at, s.msg_count, COALESCE(s.summary,''),
-       s.summary_model, s.summary_at, s.alive,
+       s.summary_model, s.summary_at, s.title, s.alive,
        -- seq>=0 才是对话消息：摘要块存在 seq=-1，它进 FTS 但不进回读列表，
        -- 若计入总数，分页器会多出一页永远空的「下一页」
        (SELECT COUNT(*) FROM blocks WHERE session_id = s.id AND seq >= 0)
 FROM sessions s WHERE s.id = ?`, id).
 		Scan(&v.ID, &v.Source, &v.SessionUID, &v.AgentLabel, &v.FilePath, &v.ProjectPath,
 			&v.StartedAt, &v.EndedAt, &v.MsgCount, &v.Summary,
-			&v.SummaryModel, &v.SummaryAt, &alive, &v.Total)
+			&v.SummaryModel, &v.SummaryAt, &v.Title, &alive, &v.Total)
 	if err != nil {
 		return v, err
 	}

@@ -380,6 +380,35 @@ mark {
 .turn .step.note { color: var(--hit-fg); font-family: var(--sans); }
 .turn .a { margin-top: 8px; }
 
+/* 会话名（用户 /rename 的）。加一个前导标记与 accent 色——
+ * 它是人写的，可信度高于机器摘要，值得在扫列表时一眼分辨。 */
+.sum.named { color: var(--accent); }
+.sum.named::before {
+  content: "◆ ";
+  font-size: .8em;
+  opacity: .7;
+}
+/* 有名字时摘要降为次要行：两者互补，不该二选一 */
+.sub-sum {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--fg-dim);
+  line-height: 1.5;
+}
+.tl-label.named { color: var(--accent); }
+.reader-title {
+  font-family: var(--title-font);
+  font-size: var(--sum-size);
+  color: var(--accent);
+  margin-top: 4px;
+}
+
+/* 代码轻量着色。颜色全部复用既有 token——注释用 fg-faint（本就是"次要"语义），
+ * 字符串/数字借 ANSI 的绿与青，四套主题的对比度已由 TestANSIColorsAreLegible 覆盖。 */
+.t-com { color: var(--fg-faint); font-style: italic; }
+.t-str { color: var(--ansi-green); }
+.t-num { color: var(--ansi-cyan); }
+
 /* ---------------- 工具调用 ---------------- */
 
 .tc-wrap { margin-top: 4px; }

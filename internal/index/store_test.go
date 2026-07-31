@@ -292,3 +292,71 @@ func TestRepairFixesStaleMsgCount(t *testing.T) {
 		t.Errorf("msg_count = %d, want 2（自愈未生效）", got)
 	}
 }
+
+// 在**已有数据**的库上加列不能丢数据。
+//
+// R2 那次 summary_msg_count 就是栽在这里：CREATE TABLE IF NOT EXISTS 对已有的库
+// 加不了列，开发机（新建库）一切正常，一升级到真实索引就 no such column。
+func TestTitleMigrationOnExistingDB(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "index.db")
+
+	st, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := st.UpsertSession(model.SessionMeta{
+		Source: model.SourceClaude, SessionUID: "u1", FilePath: "/s/u1.jsonl",
+		ProjectPath: "/p", StartedAt: 100, EndedAt: 200,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetTitle(id, "我起的名字"); err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+
+	// 再开一次：migration 会重跑，必须幂等且不丢数据
+	st2, err := Open(path)
+	if err != nil {
+		t.Fatalf("重开已有库失败（migration 不幂等？）: %v", err)
+	}
+	defer st2.Close()
+
+	var got string
+	if err := st2.DB().QueryRow(`SELECT title FROM sessions WHERE id = ?`, id).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got != "我起的名字" {
+		t.Errorf("重开后 title = %q，数据丢了", got)
+	}
+}
+
+// 空标题不得覆盖已存的名字——增量续读时这一段可能根本没有标题记录。
+func TestSetTitleIgnoresEmpty(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "index.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	id, err := st.UpsertSession(model.SessionMeta{
+		Source: model.SourceClaude, SessionUID: "u1", FilePath: "/s/u1.jsonl",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetTitle(id, "原名"); err != nil {
+		t.Fatal(err)
+	}
+	for _, empty := range []string{"", "   ", "\n"} {
+		if err := st.SetTitle(id, empty); err != nil {
+			t.Fatal(err)
+		}
+		var got string
+		st.DB().QueryRow(`SELECT title FROM sessions WHERE id = ?`, id).Scan(&got)
+		if got != "原名" {
+			t.Fatalf("空标题 %q 把已存的名字抹掉了，现在是 %q", empty, got)
+		}
+	}
+}

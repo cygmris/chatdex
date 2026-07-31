@@ -6,6 +6,7 @@ package index
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -91,6 +92,39 @@ func (s *Store) DB() *sql.DB { return s.db }
 
 // UpsertSession 按 file_path 建立或更新会话元数据，返回会话 id。
 // 不动水位字段——那是 AppendBlocks / ResetSession 的职责。
+// meta 是一张 k/v 小表，记「跑过一次就不必再跑」这类水位。
+// 与 migrations（结构变更）和 repairs（数据自愈）都不同：那两个每次启动都执行，
+// 这个是用来**避免**重复执行的。
+func (s *Store) metaGet(k string) (string, error) {
+	var v string
+	err := s.db.QueryRow(`SELECT v FROM meta WHERE k = ?`, k).Scan(&v)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return v, err
+}
+
+func (s *Store) metaSet(k, v string) error {
+	_, err := s.db.Exec(
+		`INSERT INTO meta (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v`, k, v)
+	return err
+}
+
+// SetTitle 记下会话名。
+//
+// 与 UpsertSession 分开是因为时序：Upsert 在 Parse **之前**跑（它只有 Meta，
+// 而 Meta 只读文件头 50 行拿不到标题），标题是 Parse 逐行走完才知道的。
+//
+// ⚠️ 空标题一律不写。增量续读时若这一段里没有标题记录，cur.Title 就是空——
+// 这时候写下去会把之前存的名字抹掉。
+func (s *Store) SetTitle(id int64, title string) error {
+	if strings.TrimSpace(title) == "" {
+		return nil
+	}
+	_, err := s.db.Exec(`UPDATE sessions SET title = ? WHERE id = ?`, title, id)
+	return err
+}
+
 func (s *Store) UpsertSession(m model.SessionMeta) (int64, error) {
 	_, err := s.db.Exec(`
 INSERT INTO sessions (source, session_uid, parent_uid, agent_label, file_path, project_path, started_at, ended_at, msg_count, alive)

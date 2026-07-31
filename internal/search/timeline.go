@@ -15,6 +15,7 @@ type TimelineSession struct {
 	EndedAt    int64  `json:"ended_at"`
 	MsgCount   int    `json:"msg_count"`
 	HasSummary bool   `json:"has_summary"`
+	Title      string `json:"title,omitempty"` // 用户 /rename 的名字
 	// Label 是可供辨认的文字：优先用摘要，没有就退回首条用户消息（需求 9.2）。
 	Label string `json:"label"`
 }
@@ -70,6 +71,7 @@ func (e *Engine) Timeline(q Query) ([]ProjectGroup, error) {
 SELECT s.id, s.source, s.agent_label, s.file_path, s.project_path,
        s.started_at, s.ended_at, s.msg_count,
        COALESCE(NULLIF(s.summary, ''), '') AS summary,
+       s.title,
        COALESCE((SELECT b.body FROM blocks b
                  WHERE b.session_id = s.id AND b.kind = 'user' AND b.seq >= 0
                  ORDER BY b.seq LIMIT 1), '') AS first_user
@@ -86,15 +88,20 @@ LIMIT ? OFFSET ?`, append(args, limit, offset)...)
 	byProject := map[string]*ProjectGroup{}
 	for rows.Next() {
 		var t TimelineSession
-		var project, summary, firstUser string
+		var project, summary, firstUser, title string
 		if err := rows.Scan(&t.ID, &t.Source, &t.AgentLabel, &t.FilePath, &project,
-			&t.StartedAt, &t.EndedAt, &t.MsgCount, &summary, &firstUser); err != nil {
+			&t.StartedAt, &t.EndedAt, &t.MsgCount, &summary, &title, &firstUser); err != nil {
 			return nil, err
 		}
-		if summary != "" {
+		// 用户 /rename 的名字优先——人写的比机器摘要可信
+		t.Title = title
+		switch {
+		case title != "":
+			t.Label = title
+		case summary != "":
 			t.HasSummary = true
 			t.Label = summary
-		} else {
+		default:
 			t.Label = clipRunes(Strip(firstUser), timelineLabelChars)
 		}
 		if project == "" {

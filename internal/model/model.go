@@ -37,6 +37,7 @@ type SessionMeta struct {
 	StartedAt   int64 // unix 秒
 	EndedAt     int64
 	MsgCount    int
+	Title       string // 用户 /rename 的名字或 agent 自动生成；Codex 侧恒为空
 }
 
 // Block 是一条可检索的内容块。

@@ -38,7 +38,9 @@
       `<p class="hint digest-lede">共 <span id="dg-count">${CD.summaryCount || '…'}</span> 条摘要。${CD.query.q ? '当前只在摘要文本内匹配。' : '按时间倒序。'}</p>` +
       list.map((s) => `
         <article class="hit" data-id="${s.id}">
-          <p class="sum">${CD.query.q ? CD.escHit(s.snippet) : CD.esc(s.summary)}</p>
+          <p class="sum${s.title ? ' named' : ''}">${
+            CD.query.q ? CD.escHit(s.snippet) : CD.esc(CD.sessionTitle(s))}</p>${
+            !CD.query.q && CD.sessionSubtitle(s) ? `<p class="sub-sum">${CD.esc(CD.sessionSubtitle(s))}</p>` : ''}
           <div class="foot">
             <span class="badge">${s.source === 'codex' ? 'CODEX' : 'CLAUDE'}</span>
             ${s.agent_label ? '<span class="badge">子代理</span>' : ''}

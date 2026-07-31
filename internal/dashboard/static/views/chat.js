@@ -116,6 +116,7 @@
           steps.append(n);
         } else if (e.type === 'answer') {
           answer.innerHTML = CD.md(e.text || '（无内容）');
+          CD.tintCodeBlocks(answer);
           CD.linkifySessions(answer);
           answer.querySelectorAll('.sess-link').forEach((el) =>
             (el.onclick = (ev) => { ev.preventDefault(); CD.openSession(+el.dataset.id, 0); }));

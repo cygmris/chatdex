@@ -212,3 +212,51 @@ func TestClaudeSubagentParse(t *testing.T) {
 		t.Errorf("子代理首块 = %q", blocks[0].Body)
 	}
 }
+
+// 会话名：/rename 写 custom-title，agent 自动命名写 agent-name。
+// 这两类不是消息（不进 blocks），但带着用户亲手起的名字——
+// 跳过它们不等于该把名字扔掉。
+func TestClaudeParsesSessionTitle(t *testing.T) {
+	cases := []struct {
+		name  string
+		lines []string
+		want  string
+	}{
+		{"只有 agent-name",
+			[]string{`{"type":"agent-name","agentName":"auto-1"}`}, "auto-1"},
+		{"custom-title 优先于 agent-name",
+			[]string{
+				`{"type":"agent-name","agentName":"auto-1"}`,
+				`{"type":"custom-title","customTitle":"我起的"}`,
+			}, "我起的"},
+		{"顺序颠倒也是 custom-title 优先",
+			[]string{
+				`{"type":"custom-title","customTitle":"我起的"}`,
+				`{"type":"agent-name","agentName":"auto-1"}`,
+			}, "我起的"},
+		{"改过名取最后一次",
+			[]string{
+				`{"type":"custom-title","customTitle":"旧名"}`,
+				`{"type":"custom-title","customTitle":"新名"}`,
+			}, "新名"},
+		{"都没有则为空", []string{`{"type":"mode","mode":"normal"}`}, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			src := strings.Join(c.lines, "\n") + "\n"
+			var got []model.Block
+			cur, err := Claude{}.Parse(strings.NewReader(src), Cursor{},
+				func(b model.Block) error { got = append(got, b); return nil })
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cur.Title != c.want {
+				t.Errorf("Title = %q, want %q", cur.Title, c.want)
+			}
+			// 这些记录不是消息，一条块都不该产生
+			if len(got) != 0 {
+				t.Errorf("产生了 %d 个块，标题记录不该进 blocks", len(got))
+			}
+		})
+	}
+}

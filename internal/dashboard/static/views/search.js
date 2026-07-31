@@ -44,9 +44,11 @@
 
     root.innerHTML =
       list.map((s) => {
-        // 有摘要就用摘要当主标题；没有（尚未生成）才退回片段
-        const head = s.summary
-          ? `<p class="sum">${CD.esc(s.summary)}</p>`
+        // 主标题优先用户 /rename 的名字，其次摘要；都没有才退回片段
+        const sub = CD.sessionSubtitle(s);
+        const head = (s.title || s.summary)
+          ? `<p class="sum${s.title ? ' named' : ''}">${CD.esc(CD.sessionTitle(s))}</p>` +
+            (sub ? `<p class="sub-sum">${CD.esc(sub)}</p>` : '')
           : '';
         const best = s.best_kind
           ? `${CD.esc(CD.KIND_LABEL[s.best_kind] || s.best_kind)}${s.best_tool ? '·' + CD.esc(s.best_tool) : ''}`

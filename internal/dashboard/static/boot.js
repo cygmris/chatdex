@@ -36,6 +36,115 @@ CD.clickable = (el, fn) => {
   };
 };
 
+/* ---------------- 代码轻量着色 ---------------- */
+
+/* 只认三类词法：注释 / 字符串 / 数字。**不认关键字**——那要按语言维护词表，
+ * 正是本期要避开的成本（引 Prism 最小集也要 +15 KB 且要按语言拆包，
+ * 而代码块只占 2–5%）。
+ *
+ * ⚠️ 不能用「多条正则依次替换」。第二条正则会命中第一条产出的 HTML——
+ * 比如字符串 "https://x" 被包成 span 之后，注释正则会在它内部找到 `//`
+ * 并把已生成的标记切断。这与 R4「不能对已渲染的 HTML 做正则替换」是同一个坑，
+ * 本项目第三次遇到。
+ *
+ * 改为**一次线性扫描的三态机**：一个字符只被判定一次，不存在重复匹配。
+ * 也天然满足「字符串里的 // 不是注释、注释里的引号不开字符串」。
+ *
+ * 主扫描不用正则（用 charCode 比较），从根本上避开回溯风险。
+ */
+const TINT_MAX = 50 * 1024;   // 超过就不着色：再大页面会卡，而收益趋近于零
+
+function isDigit(c) { return c >= 48 && c <= 57; }
+function isWordChar(c) {
+  return (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c === 95;
+}
+
+CD.tint = (src) => {
+  const t = String(src ?? '');
+  if (t.length > TINT_MAX) return CD.esc(t);   // 需求 4.2
+  try {
+    let out = '';
+    let i = 0;
+    const n = t.length;
+    // 分段输出：**转义在最内层做**。先转义整串再扫描是错的——
+    // 转义会把 " 变成 &quot;，长度和字符都变了，扫描位置就对不上。
+    const emit = (from, to, cls) => {
+      if (to <= from) return;
+      const chunk = CD.esc(t.slice(from, to));
+      out += cls ? `<span class="${cls}">${chunk}</span>` : chunk;
+    };
+
+    let plain = 0;   // 当前普通段的起点
+    while (i < n) {
+      const c = t[i];
+      const cc = t.charCodeAt(i);
+
+      // 块注释
+      if (c === '/' && t[i + 1] === '*') {
+        emit(plain, i, '');
+        const end = t.indexOf('*/', i + 2);
+        const stop = end < 0 ? n : end + 2;
+        emit(i, stop, 't-com');
+        i = plain = stop;
+        continue;
+      }
+      /* 行注释：**只认 //**。
+       *
+       * 原本还认 # 和 --，实测都是严重误判源，按需求 2「正确性优先于覆盖率」砍掉：
+       *   `# 标题`        Markdown 标题被整行涂成注释
+       *   `#app { … }`    CSS 选择器同理
+       *   `curl --silent --output x.txt`  **整条命令后半段**被涂成注释
+       * 最后一个在本语料里遍地都是（shell 长参数）。
+       *
+       * # 与 -- 的含义完全取决于语言，而判断语言正是本期明确不做的事
+       * （需求 1.4）。无法确定就不着色，不猜。
+       */
+      if (c === '/' && t[i + 1] === '/') {
+        emit(plain, i, '');
+        let e = t.indexOf('\n', i);
+        if (e < 0) e = n;
+        emit(i, e, 't-com');
+        i = plain = e;
+        continue;
+      }
+      // 字符串
+      if (c === '"' || c === "'" || c === '`') {
+        let j = i + 1;
+        let closed = false;
+        while (j < n) {
+          if (t[j] === '\\') { j += 2; continue; }   // 转义字符跳过一对
+          if (t[j] === '\n' && c !== '`') break;      // 反引号可跨行，其余不行
+          if (t[j] === c) { closed = true; j++; break; }
+          j++;
+        }
+        if (!closed) { i++; continue; }  // 引号不成对 → 不猜，当普通字符（需求 2.1）
+        emit(plain, i, '');
+        emit(i, j, 't-str');
+        i = plain = j;
+        continue;
+      }
+      // 数字：要求左边界不是词字符，避免把 abc123 的 123 涂了
+      if (isDigit(cc) && (i === 0 || !isWordChar(t.charCodeAt(i - 1)))) {
+        let j = i;
+        while (j < n && (isDigit(t.charCodeAt(j)) || t[j] === '.' ||
+               (t[j] >= 'a' && t[j] <= 'f') || (t[j] >= 'A' && t[j] <= 'F') ||
+               t[j] === 'x' || t[j] === 'X')) j++;
+        emit(plain, i, '');
+        emit(i, j, 't-num');
+        i = plain = j;
+        continue;
+      }
+      i++;
+    }
+    emit(plain, n, '');
+    return out;
+  } catch (e) {
+    // 着色是纯展示增强，失败退回无色，绝不吞内容（需求 2.4）
+    console.warn('代码着色失败，退回无色', e);
+    return CD.esc(t);
+  }
+};
+
 /* ---------------- 工具调用渲染 ---------------- */
 
 /* tool_use 占全部内容块的 39.4%（274k / 696k），是回读时看得最多的一类，
@@ -83,7 +192,7 @@ CD.toolCall = (name, body) => {
     }
     // 不是 JSON 对象：exec 的 JS 源码走这条。不做语言探测——
     // "不是 JSON" 反推即可，猜语言只会猜错。
-    return `<pre class="tc-code">${CD.esc(text)}</pre>`;
+    return `<pre class="tc-code">${CD.tint(text)}</pre>`;
   } catch (e) {
     // 单条渲染失败不得影响同页其它消息（需求 Reliability）
     console.warn('工具调用渲染失败，退回原文', name, e);
@@ -189,12 +298,14 @@ function renderFile(map, obj, rest) {
  */
 function renderPatch(text) {
   const rows = String(text).split('\n').map((line) => {
-    const e = CD.esc(line);
-    if (line.startsWith('*** ')) return `<span class="p-head">${e}</span>`;
-    if (line.startsWith('+')) return `<span class="p-add">${e}</span>`;
-    if (line.startsWith('-')) return `<span class="p-del">${e}</span>`;
-    if (line.startsWith('@@')) return `<span class="p-hunk">${e}</span>`;
-    return e;
+    // 首字符（+/-）保持原样，其后的内容做轻量着色——
+    // 这样 diff 的增删色仍由外层 span 决定，不被内层覆盖
+    const tinted = (pfx) => `${CD.esc(pfx)}${CD.tint(line.slice(pfx.length))}`;
+    if (line.startsWith('*** ')) return `<span class="p-head">${CD.esc(line)}</span>`;
+    if (line.startsWith('@@')) return `<span class="p-hunk">${CD.esc(line)}</span>`;
+    if (line.startsWith('+')) return `<span class="p-add">${tinted('+')}</span>`;
+    if (line.startsWith('-')) return `<span class="p-del">${tinted('-')}</span>`;
+    return CD.tint(line);
   });
   return `<pre class="tc-patch">${rows.join('\n')}</pre>`;
 }
@@ -285,6 +396,7 @@ CD.md = (src) => {
   if (!text.trim()) return '';
   try {
     const html = window.marked.parse(text, { breaks: true, gfm: true });
+    // 围栏代码块着色：在**消毒之后**对文本节点做，不对 HTML 串做正则替换
     return window.DOMPurify.sanitize(html, {
       // 收紧到 http/https/mailto：javascript: 与 data: 一律出局
       ALLOWED_URI_REGEXP: MD_URI,
@@ -314,6 +426,19 @@ const SESS_RE = /(?:会话\s*(?:id)?\s*[:：]?\s*#?|#)(\d+)/gi;
 /* 答案现在是 Markdown 渲染出来的 HTML，**不能再对 HTML 串做正则替换**——
  * 那会打断标签（比如把 <a href="...#12"> 里的 #12 也换掉）。
  * 改成消毒之后遍历文本节点，只在文本里替换，标签一概不碰。 */
+/* 给已渲染的 DOM 里的围栏代码块着色。
+ *
+ * 必须在**消毒之后、对 DOM** 做，不能对 HTML 串做正则替换——
+ * 那会打断标签。与 CD.linkifySessions 同一条纪律（本项目第三次）。
+ */
+CD.tintCodeBlocks = (root) => {
+  root.querySelectorAll('pre > code').forEach((el) => {
+    // 只处理纯文本的代码块；已经有子元素说明被别的东西处理过了，不重复上色
+    if (el.children.length) return;
+    el.innerHTML = CD.tint(el.textContent);
+  });
+};
+
 CD.linkifySessions = (root) => {
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   const targets = [];
@@ -342,6 +467,19 @@ CD.linkifySessions = (root) => {
     node.replaceWith(frag);
   }
 }
+
+/* 会话在列表上叫什么。
+ *
+ * 优先用户 /rename 的名字：它是人写的，比 LLM 摘要可信——
+ * 「chatdex-init」比「请提供具体的各段提要内容」有用得多。
+ * 没有名字时维持原状显示摘要（实测只有 2% 的会话有名字）。
+ *
+ * 一处取值，三个列表共用；改规则只改这里。
+ */
+CD.sessionTitle = (s) => (s.title || '').trim() || (s.summary || '').trim() || '（无摘要）';
+
+// 有名字时摘要降为次要行——两者互补：名字说「我叫它什么」，摘要说「这次在干嘛」
+CD.sessionSubtitle = (s) => ((s.title || '').trim() && (s.summary || '').trim()) || '';
 
 CD.fmtTime = (u) =>
   u ? new Date(u * 1000).toLocaleString('zh-CN', { hour12: false }) : '—';

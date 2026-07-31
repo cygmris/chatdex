@@ -177,11 +177,29 @@ func TestToolCallRenderingInvariants(t *testing.T) {
 		t.Error("renderPatch 先包了 span 才转义 —— 顺序反了会注入 HTML")
 	}
 
-	// 未引入语法高亮库（需求 5.1）
-	for _, lib := range []string{"highlight.js", "hljs", "Prism", "shiki"} {
-		if strings.Contains(boot, lib) {
-			t.Errorf("引入了语法高亮 %s —— 本期明确不做", lib)
+	// 未引入语法高亮库（需求 5.1）。
+	//
+	// 查的是「有没有真的加载/调用」，不是「文中有没有出现这几个词」——
+	// 注释里写一句"引 Prism 也要 +15 KB"会被后者误判，我真的踩过一次。
+	// 这与 R4 那条同源：断言的取样范围不能比它要证明的命题更宽。
+	page := fetchText(t, e.uiPort, "/")
+	for _, lib := range []string{"highlight", "hljs", "prism", "shiki"} {
+		// 页面上有没有加载它的 script
+		if strings.Contains(strings.ToLower(page), lib+".") ||
+			strings.Contains(strings.ToLower(page), "/"+lib) {
+			t.Errorf("页面加载了语法高亮库 %s —— 本期明确不做", lib)
 		}
+		// 代码里有没有调用它
+		for _, call := range []string{lib + ".highlight", lib + ".highlightAll", "new " + lib} {
+			if strings.Contains(strings.ToLower(boot), strings.ToLower(call)) {
+				t.Errorf("调用了语法高亮 %s —— 本期明确不做", call)
+			}
+		}
+	}
+	// vendor 目录里也不该多出高亮库
+	if body := fetchText(t, e.uiPort, "/"); strings.Contains(body, "vendor/highlight") ||
+		strings.Contains(body, "vendor/prism") {
+		t.Error("vendor 下出现了语法高亮库")
 	}
 
 	// diff 颜色必须走 token：写死 hex 的话总有一套主题下看不见。
@@ -190,6 +208,28 @@ func TestToolCallRenderingInvariants(t *testing.T) {
 	// 规则里的 var(--) 从而放行写死的颜色（变异验证时真的漏掉了）。
 	css := fetchText(t, e.uiPort, "/layout.css")
 	for _, cls := range []string{".p-add", ".p-del"} {
+		i := strings.Index(css, cls+" {")
+		if i < 0 {
+			t.Errorf("layout.css 里没有 %s 规则", cls)
+			continue
+		}
+		end := strings.Index(css[i:], "}")
+		if end < 0 {
+			t.Errorf("%s 规则没有闭合", cls)
+			continue
+		}
+		if rule := css[i : i+end]; !strings.Contains(rule, "var(--") {
+			t.Errorf("%s 用了写死颜色：%q", cls, strings.TrimSpace(rule))
+		}
+	}
+}
+
+// 着色色值必须走 token：写死 hex 的话总有一套主题下看不见。
+// 只看到本条规则的 } 为止——固定字符窗口会越界读到下一条规则（R4 踩过）。
+func TestTintColorsUseTokens(t *testing.T) {
+	e := start(t)
+	css := fetchText(t, e.uiPort, "/layout.css")
+	for _, cls := range []string{".t-com", ".t-str", ".t-num"} {
 		i := strings.Index(css, cls+" {")
 		if i < 0 {
 			t.Errorf("layout.css 里没有 %s 规则", cls)

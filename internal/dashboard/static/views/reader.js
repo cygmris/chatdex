@@ -53,6 +53,7 @@
           <div class="muted">${CD.fmtRange(v.started_at, v.ended_at)} · ${v.total} 条 ·
             ${v.source === 'codex' ? 'Codex' : 'Claude'}${v.agent_label ? ' · 子代理 ' + CD.esc(v.agent_label) : ''}
             ${v.alive ? '' : ' · <span class="err-inline">原始文件已不存在</span>'}</div>
+          ${v.title ? `<div class="reader-title">${CD.esc(v.title)}</div>` : ''}
           ${v.summary ? `<div class="reader-sum">${CD.esc(v.summary)}</div>` : ''}
           <div class="reader-path mono" title="原始文件绝对路径">${CD.esc(v.file_path)}</div>
         </div>
@@ -74,6 +75,9 @@
     const n = CD.$('rd-next');
     if (p) p.onclick = () => { cur.from -= PAGE; load(); };
     if (n) n.onclick = () => { cur.from += PAGE; load(); };
+
+    // Markdown 里的围栏代码块着色（必须在 DOM 上做，不对 HTML 串做替换）
+    root.querySelectorAll('.msg .md').forEach((el) => CD.tintCodeBlocks(el));
 
     const t = document.getElementById('seq-' + cur.target);
     if (t) t.scrollIntoView({ block: 'center' });
