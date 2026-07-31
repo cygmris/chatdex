@@ -36,6 +36,169 @@ CD.clickable = (el, fn) => {
   };
 };
 
+/* ---------------- 工具调用渲染 ---------------- */
+
+/* tool_use 占全部内容块的 39.4%（274k / 696k），是回读时看得最多的一类，
+ * 却一直按序列化 JSON 原样显示——转义引号满地、命令和说明挤一行。
+ *
+ * 实测正文形态（以 API 下发的文本为准，**不能读裸库**：库里存的是 CJK 单字切分
+ * 后的形式，带 U+0001 分隔符，API 下发前会 Strip。照裸库判断会得出"31% 非法 JSON"
+ * 这种错误结论）：
+ *   合法 JSON 对象  91.2%   Bash / exec_command / Read / Edit / Write / 各 MCP 工具
+ *   JS 源码          5.3%   exec（Codex 批量执行）
+ *   patch 文本       3.5%   apply_patch
+ *
+ * 设计取舍：**一张映射表 + 三种骨架**，而不是每个工具一个渲染函数。
+ * 前 15 个工具覆盖 88%，但尾巴很长（各种 MCP 工具）——逐个写既写不完，
+ * 新工具出现时还会留下空白。改为声明"每个字段是什么角色",未知工具落通用键值表。
+ */
+
+// 字段角色：primary 主体 / sub 次要说明 / ctx 上下文 / diff 前后对照 /
+//           body 大段内容(可折叠) / noise 不显示
+// ⚠️ 只此一张表。新增工具改这里，渲染逻辑不动。
+const TOOL_MAP = {
+  Bash:          { shape: 'cmd',  primary: 'command',   sub: 'description', noise: ['timeout'] },
+  exec_command:  { shape: 'cmd',  primary: 'cmd',       ctx: ['workdir'],
+                   noise: ['max_output_tokens', 'yield_time_ms'] },
+  write_stdin:   { shape: 'cmd',  primary: 'chars',     ctx: ['session_id'],
+                   noise: ['max_output_tokens', 'yield_time_ms'] },
+  Read:          { shape: 'file', primary: 'file_path', ctx: ['offset', 'limit'] },
+  Write:         { shape: 'file', primary: 'file_path', body: 'content' },
+  Edit:          { shape: 'file', primary: 'file_path', diff: ['old_string', 'new_string'],
+                   ctx: ['replace_all'] },
+  NotebookEdit:  { shape: 'file', primary: 'notebook_path', body: 'new_source' },
+};
+
+CD.toolCall = (name, body) => {
+  const text = String(body ?? '');
+  try {
+    // patch 的特征串最明确，先判它
+    if (text.startsWith('*** Begin Patch')) return renderPatch(text);
+
+    let obj = null;
+    try { obj = JSON.parse(text); } catch { /* 落到下面的非 JSON 分支 */ }
+
+    if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
+      return renderShape(TOOL_MAP[name] || { shape: 'kv' }, obj);
+    }
+    // 不是 JSON 对象：exec 的 JS 源码走这条。不做语言探测——
+    // "不是 JSON" 反推即可，猜语言只会猜错。
+    return `<pre class="tc-code">${CD.esc(text)}</pre>`;
+  } catch (e) {
+    // 单条渲染失败不得影响同页其它消息（需求 Reliability）
+    console.warn('工具调用渲染失败，退回原文', name, e);
+    return `<pre>${CD.esc(text)}</pre>`;
+  }
+};
+
+function renderShape(map, obj) {
+  const used = new Set([map.primary, map.sub, map.body, ...(map.ctx || []), ...(map.diff || []),
+                        ...(map.noise || [])].filter(Boolean));
+  const rest = Object.keys(obj).filter((k) => !used.has(k) && obj[k] !== undefined);
+
+  if (map.shape === 'cmd') return renderCmd(map, obj, rest);
+  if (map.shape === 'file') return renderFile(map, obj, rest);
+  return `<div class="tc">${kvList(obj, Object.keys(obj))}</div>`;
+}
+
+// 值可能是数字/布尔/对象，一律转成可读字符串再转义
+function val(v) {
+  if (v === null || v === undefined) return '';
+  return typeof v === 'object' ? JSON.stringify(v) : String(v);
+}
+
+function kvList(obj, keys) {
+  const rows = keys.filter((k) => val(obj[k]) !== '').map((k) => {
+    const v = val(obj[k]);
+    // 单个长参数会把整页顶开，超阈值折叠
+    const body = v.length > 200
+      ? `<details><summary>${v.length} 字符</summary><pre>${CD.esc(v)}</pre></details>`
+      : `<span>${CD.esc(v)}</span>`;
+    return `<dt>${CD.esc(k)}</dt><dd>${body}</dd>`;
+  });
+  return rows.length ? `<dl class="tc-kv">${rows.join('')}</dl>` : '';
+}
+
+/* 命令型（Bash / exec_command / write_stdin，合计 52.1%）。
+ *
+ * 要点是"复制出来能直接跑"：
+ *   - 命令是 JSON 字符串解出来的，转义天然还原（\" → "），不用手工处理
+ *   - 保留原始换行,多行命令不压成一行
+ *   - $ 提示符用 ::before 画,**不进 DOM 文本**,选中复制不会带走它
+ *   - 长行自己横滚,页面本身不横滚
+ */
+function renderCmd(map, obj, rest) {
+  const cmd = val(obj[map.primary]);
+  const parts = [];
+  if (cmd) parts.push(`<div class="tc-cmd"><code>${CD.esc(cmd)}</code></div>`);
+  const sub = map.sub ? val(obj[map.sub]) : '';
+  if (sub) parts.push(`<div class="tc-sub">${CD.esc(sub)}</div>`);
+  const ctx = (map.ctx || []).filter((k) => val(obj[k]) !== '')
+    .map((k) => `<span><i>${CD.esc(k)}</i> ${CD.esc(val(obj[k]))}</span>`);
+  if (ctx.length) parts.push(`<div class="tc-ctx">${ctx.join('')}</div>`);
+  // 映射表没覆盖到的键仍然显示,不静默丢信息
+  if (rest && rest.length) parts.push(kvList(obj, rest));
+  return `<div class="tc">${parts.join('')}</div>`;
+}
+/* 文件型（Read / Write / Edit / NotebookEdit，合计 23.2%）。
+ *
+ * Edit 的 old_string / new_string 是两大段文本,平铺出来根本看不出改了什么,
+ * 所以做成前后对照。Write 的 content 可能是整个文件,必须可折叠——
+ * 不折叠的话一条 Write 就能把整页顶开。
+ */
+function renderFile(map, obj, rest) {
+  const parts = [];
+  const path = val(obj[map.primary]);
+  if (path) parts.push(`<div class="tc-path">${CD.esc(path)}</div>`);
+
+  const ctx = (map.ctx || []).filter((k) => val(obj[k]) !== '')
+    .map((k) => `<span><i>${CD.esc(k)}</i> ${CD.esc(val(obj[k]))}</span>`);
+  if (ctx.length) parts.push(`<div class="tc-ctx">${ctx.join('')}</div>`);
+
+  if (map.diff) {
+    const [ok, nk] = map.diff;
+    const o = val(obj[ok]), n = val(obj[nk]);
+    if (o || n) {
+      parts.push(`<div class="tc-ba">
+        <div class="tc-b"><span class="tc-tag">改前</span><pre>${CD.esc(o)}</pre></div>
+        <div class="tc-a"><span class="tc-tag">改后</span><pre>${CD.esc(n)}</pre></div>
+      </div>`);
+    }
+  }
+
+  if (map.body) {
+    const c = val(obj[map.body]);
+    if (c) {
+      // 短内容直接展开,长的折叠——阈值取一屏左右
+      const long = c.length > 600;
+      parts.push(long
+        ? `<details class="tc-file"><summary>内容 ${c.length} 字符</summary><pre>${CD.esc(c)}</pre></details>`
+        : `<pre class="tc-file-open">${CD.esc(c)}</pre>`);
+    }
+  }
+
+  if (rest && rest.length) parts.push(kvList(obj, rest));
+  return `<div class="tc">${parts.join('')}</div>`;
+}
+/* apply_patch（3.5%）。正文是 patch 文本,不是 JSON:
+ *   *** Begin Patch / *** Add File: xxx / +新增行 / -删除行
+ *
+ * 逐行看首字符就够,**不引 diff 解析库**（需求 3.4）。
+ * ⚠️ 先 CD.esc 整行、再包 span——顺序反了等于把 patch 内容里的任意 HTML
+ *    注进页面。与 escHit / CD.ansi 同一条纪律。
+ */
+function renderPatch(text) {
+  const rows = String(text).split('\n').map((line) => {
+    const e = CD.esc(line);
+    if (line.startsWith('*** ')) return `<span class="p-head">${e}</span>`;
+    if (line.startsWith('+')) return `<span class="p-add">${e}</span>`;
+    if (line.startsWith('-')) return `<span class="p-del">${e}</span>`;
+    if (line.startsWith('@@')) return `<span class="p-hunk">${e}</span>`;
+    return e;
+  });
+  return `<pre class="tc-patch">${rows.join('\n')}</pre>`;
+}
+
 /* ---------------- ANSI 转义序列 ---------------- */
 
 /* 实测真实语料 673 286 块里只有 1 274 块（0.19%）含 ANSI 转义。

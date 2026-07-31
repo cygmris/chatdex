@@ -144,7 +144,8 @@ Grouped by project, newest first — useful for "what was I even doing that week
 ### Transcript replay
 
 Read the original exchange message by message. Assistant output renders as Markdown, ANSI colours
-in command output are coloured, and tool-call JSON is left alone. One click switches to **raw** —
+in command output are coloured, and **tool calls render structurally** — a command looks like a command
+(copy it and it runs), a file edit shows before/after, a patch shows as a coloured diff. One click switches to **raw** —
 this is a forensic tool, and sometimes the exact stored bytes are the point. The session id lives in
 the URL, so reloading or sharing lands in the same place.
 

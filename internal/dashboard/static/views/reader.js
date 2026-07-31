@@ -95,8 +95,11 @@
       case 'tool_result':
         // 命令输出：可能带 ANSI 颜色，但不是 Markdown
         return `<pre>${CD.ansi(m.body)}</pre>`;
+      case 'tool_use':
+        // 第三种渲染：参数按结构显示。R3 时这里写的是"两种渲染都不合适、保持原样"——
+        // "我这两个渲染器都不适用"推不出"原样最好"，正确结论是需要第三种。
+        return `<div class="tc-wrap">${CD.toolCall(m.tool_name, m.body)}</div>`;
       default:
-        // tool_use 的正文是 JSON 参数，两种渲染都不合适，保持原样
         return `<pre>${CD.esc(m.body)}</pre>`;
     }
   }

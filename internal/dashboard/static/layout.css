@@ -380,6 +380,152 @@ mark {
 .turn .step.note { color: var(--hit-fg); font-family: var(--sans); }
 .turn .a { margin-top: 8px; }
 
+/* ---------------- 工具调用 ---------------- */
+
+.tc-wrap { margin-top: 4px; }
+.tc { display: flex; flex-direction: column; gap: 5px; }
+
+/* 命令：主体。提示符用 ::before 画——它不在 DOM 文本里,
+ * 所以整段选中复制出去就是能直接执行的原文（需求 1.6）。 */
+.tc-cmd {
+  position: relative;
+  padding-left: 15px;
+  overflow-x: auto;
+}
+.tc-cmd::before {
+  content: "$";
+  position: absolute;
+  left: 0;
+  top: 0;
+  color: var(--fg-faint);
+  font-family: var(--mono);
+  font-size: 12px;
+  user-select: none;
+}
+.tc-cmd code {
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--fg);
+  white-space: pre;      /* 多行命令保留换行，长行横滚不折 */
+  display: block;
+}
+.tc-sub { font-size: 12px; color: var(--fg-dim); }
+.tc-ctx {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--fg-faint);
+}
+.tc-ctx i { font-style: normal; opacity: .75; }
+
+/* 文件路径：这一步动的是哪个文件,是第一眼要看的 */
+.tc-path {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  color: var(--fg);
+  word-break: break-all;
+}
+
+/* Edit 的前后对照。窄屏下自动堆叠成上下两块。 */
+.tc-ba { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.tc-ba > div {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 6px 8px;
+  min-width: 0;
+}
+.tc-b { border-left: 2px solid var(--ansi-red) !important; }
+.tc-a { border-left: 2px solid var(--ansi-green) !important; }
+.tc-tag {
+  display: block;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: .04em;
+  margin-bottom: 3px;
+}
+.tc-b .tc-tag { color: var(--ansi-red); }
+.tc-a .tc-tag { color: var(--ansi-green); }
+.tc-ba pre {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--fg-dim);
+  max-height: 16em;
+  overflow: auto;
+}
+@media (max-width: 720px) { .tc-ba { grid-template-columns: 1fr; } }
+
+.tc-file summary { cursor: pointer; font-size: 11.5px; color: var(--fg-dim); font-family: var(--mono); }
+.tc-file pre, .tc-file-open {
+  margin: 5px 0 0;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--fg-dim);
+  max-height: 24em;
+  overflow: auto;
+}
+
+/* 通用键值表：未知工具落这里,不会出现"空白"这种状态 */
+.tc-kv { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; margin: 0; }
+.tc-kv dt {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--fg-faint);
+  white-space: nowrap;
+}
+.tc-kv dd {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  min-width: 0;
+  word-break: break-word;
+}
+.tc-kv dd pre {
+  margin: 4px 0 0;
+  font-size: 11.5px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--fg-dim);
+}
+.tc-kv summary { cursor: pointer; color: var(--fg-dim); font-size: 11.5px; }
+
+/* patch：逐行着色。色值取自 ANSI token（删=红/增=绿），
+ * 与 Edit 的前后对照同源,不另立一套语义色。 */
+.tc-patch {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.6;
+  white-space: pre;
+  overflow-x: auto;
+  color: var(--fg-dim);
+}
+.tc-patch .p-add { color: var(--ansi-green); }
+.tc-patch .p-del { color: var(--ansi-red); }
+.tc-patch .p-head { color: var(--accent); font-weight: 600; }
+.tc-patch .p-hunk { color: var(--ansi-cyan); }
+
+/* 非 JSON 的正文（exec 的 JS 源码等）：等宽 + 保留换行 + 长行横滚,
+ * 横滚是给自己滚,页面本身不得横滚 */
+.tc-code {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.6;
+  white-space: pre;
+  overflow-x: auto;
+  color: var(--fg-dim);
+}
+
 /* ---------------- ANSI 着色 ---------------- */
 /* 取自主题 token：写死 hex 的话总有一套主题下看不见（见 theme.css 的注释）。 */
 

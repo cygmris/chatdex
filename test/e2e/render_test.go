@@ -138,3 +138,70 @@ func TestNoRuntimeExternalRequests(t *testing.T) {
 		}
 	}
 }
+
+// 工具调用渲染的结构不变式（R4）。
+//
+// 行为验证（真实语料下的命令/前后对照/diff 着色）在浏览器里做，结论记在
+// 实现日志里。这里守的是让那些结论继续成立的前提。
+func TestToolCallRenderingInvariants(t *testing.T) {
+	e := start(t)
+	boot := fetchText(t, e.uiPort, "/boot.js")
+
+	// 映射表只能有一处声明。写第二张表不会报错，只会让两处慢慢漂移，
+	// 而漂移的表现是"某个工具的某个字段莫名其妙不显示了"。
+	if n := strings.Count(boot, "const TOOL_MAP"); n != 1 {
+		t.Errorf("TOOL_MAP 声明了 %d 次，只能有一处", n)
+	}
+	for _, v := range []string{"search", "digest", "timeline", "chat", "settings", "reader"} {
+		if strings.Contains(fetchText(t, e.uiPort, "/views/"+v+".js"), "TOOL_MAP") {
+			t.Errorf("views/%s.js 里出现了 TOOL_MAP —— 映射表必须只在 boot.js", v)
+		}
+	}
+
+	// patch 渲染必须先转义再包 span。反了就是把 patch 内容里的任意 HTML
+	// 注进页面——与 escHit / CD.ansi 同一条纪律。
+	start := strings.Index(boot, "function renderPatch")
+	if start < 0 {
+		t.Fatal("找不到 renderPatch")
+	}
+	body := boot[start:]
+	if end := strings.Index(body, "\nfunction "); end > 0 {
+		body = body[:end]
+	}
+	esc := strings.Index(body, "CD.esc(line)")
+	span := strings.Index(body, "p-add")
+	if esc < 0 {
+		t.Fatal("renderPatch 没有对整行做 CD.esc")
+	}
+	if span > 0 && esc > span {
+		t.Error("renderPatch 先包了 span 才转义 —— 顺序反了会注入 HTML")
+	}
+
+	// 未引入语法高亮库（需求 5.1）
+	for _, lib := range []string{"highlight.js", "hljs", "Prism", "shiki"} {
+		if strings.Contains(boot, lib) {
+			t.Errorf("引入了语法高亮 %s —— 本期明确不做", lib)
+		}
+	}
+
+	// diff 颜色必须走 token：写死 hex 的话总有一套主题下看不见。
+	//
+	// 只看到本条规则的 } 为止——第一版用固定 90 字符窗口，会越界读到下一条
+	// 规则里的 var(--) 从而放行写死的颜色（变异验证时真的漏掉了）。
+	css := fetchText(t, e.uiPort, "/layout.css")
+	for _, cls := range []string{".p-add", ".p-del"} {
+		i := strings.Index(css, cls+" {")
+		if i < 0 {
+			t.Errorf("layout.css 里没有 %s 规则", cls)
+			continue
+		}
+		end := strings.Index(css[i:], "}")
+		if end < 0 {
+			t.Errorf("%s 规则没有闭合", cls)
+			continue
+		}
+		if rule := css[i : i+end]; !strings.Contains(rule, "var(--") {
+			t.Errorf("%s 用了写死颜色：%q", cls, strings.TrimSpace(rule))
+		}
+	}
+}
