@@ -15,3 +15,6 @@ coverage.out
 .idea/
 .vscode/
 .DS_Store
+
+# specloop 的规范与实现日志：本地开发产物，不进版本库
+.spec-workflow/
