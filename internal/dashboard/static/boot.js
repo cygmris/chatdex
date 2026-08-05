@@ -36,114 +36,331 @@ CD.clickable = (el, fn) => {
   };
 };
 
-/* ---------------- 代码轻量着色 ---------------- */
+/* ---------------- 代码高亮 ---------------- */
 
-/* 只认三类词法：注释 / 字符串 / 数字。**不认关键字**——那要按语言维护词表，
- * 正是本期要避开的成本（引 Prism 最小集也要 +15 KB 且要按语言拆包，
- * 而代码块只占 2–5%）。
+/* 用 highlight.js（124 KB，BSD-3-Clause）替代 R6 自写的那 90 行着色。
  *
- * ⚠️ 不能用「多条正则依次替换」。第二条正则会命中第一条产出的 HTML——
- * 比如字符串 "https://x" 被包成 span 之后，注释正则会在它内部找到 `//`
- * 并把已生成的标记切断。这与 R4「不能对已渲染的 HTML 做正则替换」是同一个坑，
- * 本项目第三次遇到。
+ * 为什么此前拒绝引库、现在翻转：早先三次都以「代码块只占 2–5%」为由拒绝，
+ * 但那个统计**只算了 ``` 围栏，没算 tool_use 的命令**（Bash 33.3% +
+ * exec_command 13.5% + exec 5.3% = 52.1%）。把命令算进来，代码类内容
+ * 远不止 5%，性价比因此翻转。
  *
- * 改为**一次线性扫描的三态机**：一个字符只被判定一次，不存在重复匹配。
- * 也天然满足「字符串里的 // 不是注释、注释里的引号不开字符串」。
- *
- * 主扫描不用正则（用 charCode 比较），从根本上避开回溯风险。
+ * 而且 R6 实测出自写着色的硬伤：`#` 与 `--` 在不知道语言时无法正确判断
+ * （Markdown 标题、CSS 选择器、shell 长参数都会被误判成注释），只好砍掉——
+ * 那正是 highlight.js 解决的问题。留两套会漂移，所以整体替换。
  */
-const TINT_MAX = 50 * 1024;   // 超过就不着色：再大页面会卡，而收益趋近于零
+const HL_MAX = 50 * 1024;   // 沿用 R6 阈值：更大的块着色收益趋近于零，代价却线性涨
 
-function isDigit(c) { return c >= 48 && c <= 57; }
-function isWordChar(c) {
-  return (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c === 95;
-}
-
-CD.tint = (src) => {
-  const t = String(src ?? '');
-  if (t.length > TINT_MAX) return CD.esc(t);   // 需求 4.2
+CD.highlight = (code, lang) => {
+  const t = String(code ?? '');
+  if (t.length > HL_MAX) return CD.esc(t);
+  const hljs = window.hljs;
+  if (!hljs) return CD.esc(t);              // 库没加载：退回纯文本，不报错
   try {
-    let out = '';
-    let i = 0;
-    const n = t.length;
-    // 分段输出：**转义在最内层做**。先转义整串再扫描是错的——
-    // 转义会把 " 变成 &quot;，长度和字符都变了，扫描位置就对不上。
-    const emit = (from, to, cls) => {
-      if (to <= from) return;
-      const chunk = CD.esc(t.slice(from, to));
-      out += cls ? `<span class="${cls}">${chunk}</span>` : chunk;
-    };
-
-    let plain = 0;   // 当前普通段的起点
-    while (i < n) {
-      const c = t[i];
-      const cc = t.charCodeAt(i);
-
-      // 块注释
-      if (c === '/' && t[i + 1] === '*') {
-        emit(plain, i, '');
-        const end = t.indexOf('*/', i + 2);
-        const stop = end < 0 ? n : end + 2;
-        emit(i, stop, 't-com');
-        i = plain = stop;
-        continue;
-      }
-      /* 行注释：**只认 //**。
-       *
-       * 原本还认 # 和 --，实测都是严重误判源，按需求 2「正确性优先于覆盖率」砍掉：
-       *   `# 标题`        Markdown 标题被整行涂成注释
-       *   `#app { … }`    CSS 选择器同理
-       *   `curl --silent --output x.txt`  **整条命令后半段**被涂成注释
-       * 最后一个在本语料里遍地都是（shell 长参数）。
-       *
-       * # 与 -- 的含义完全取决于语言，而判断语言正是本期明确不做的事
-       * （需求 1.4）。无法确定就不着色，不猜。
-       */
-      if (c === '/' && t[i + 1] === '/') {
-        emit(plain, i, '');
-        let e = t.indexOf('\n', i);
-        if (e < 0) e = n;
-        emit(i, e, 't-com');
-        i = plain = e;
-        continue;
-      }
-      // 字符串
-      if (c === '"' || c === "'" || c === '`') {
-        let j = i + 1;
-        let closed = false;
-        while (j < n) {
-          if (t[j] === '\\') { j += 2; continue; }   // 转义字符跳过一对
-          if (t[j] === '\n' && c !== '`') break;      // 反引号可跨行，其余不行
-          if (t[j] === c) { closed = true; j++; break; }
-          j++;
-        }
-        if (!closed) { i++; continue; }  // 引号不成对 → 不猜，当普通字符（需求 2.1）
-        emit(plain, i, '');
-        emit(i, j, 't-str');
-        i = plain = j;
-        continue;
-      }
-      // 数字：要求左边界不是词字符，避免把 abc123 的 123 涂了
-      if (isDigit(cc) && (i === 0 || !isWordChar(t.charCodeAt(i - 1)))) {
-        let j = i;
-        while (j < n && (isDigit(t.charCodeAt(j)) || t[j] === '.' ||
-               (t[j] >= 'a' && t[j] <= 'f') || (t[j] >= 'A' && t[j] <= 'F') ||
-               t[j] === 'x' || t[j] === 'X')) j++;
-        emit(plain, i, '');
-        emit(i, j, 't-num');
-        i = plain = j;
-        continue;
-      }
-      i++;
+    // 已知语言就别猜——自动识别在短代码上很容易认错
+    if (lang && hljs.getLanguage(lang)) {
+      return hljs.highlight(t, { language: lang, ignoreIllegals: true }).value;
     }
-    emit(plain, n, '');
-    return out;
+    return hljs.highlightAuto(t).value;
   } catch (e) {
-    // 着色是纯展示增强，失败退回无色，绝不吞内容（需求 2.4）
-    console.warn('代码着色失败，退回无色', e);
+    console.warn('高亮失败，退回纯文本', e);
     return CD.esc(t);
   }
 };
+
+/* 给已渲染 DOM 里的围栏代码块高亮。
+ * 必须在**消毒之后、对 DOM** 做——不能对 HTML 串做正则替换，那会打断标签。
+ * 本项目第四次守这条纪律（会话号链接、patch、R6 着色、这里）。 */
+CD.highlightCodeBlocks = (root) => {
+  root.querySelectorAll('pre > code').forEach((el) => {
+    if (el.dataset.hl) return;              // 已处理过，不重复
+    // marked 会把 ```go 渲染成 class="language-go"
+    const m = /language-(\w+)/.exec(el.className || '');
+    if (m && m[1] === 'mermaid') { mountMermaid(el); return; }
+    el.innerHTML = CD.highlight(el.textContent, m && m[1]);
+    el.dataset.hl = '1';
+  });
+};
+
+/* 消毒器剥掉 href 之后，<a> 还留在那儿——页面上就是一个看着能点、点了没反应
+ * 的死链。与 mermaid 那次「图还在字没了」同形：**渲染成功不等于渲染正确**，
+ * 而消毒器恰好只吃掉后者。
+ *
+ * 白名单不放宽：file:// / ftp:// 依然不可点。但地址本身要留着——这是取证工具，
+ * `file:///etc/passwd` 这个字符串本身就是信息。
+ *
+ * 必须对 DOM 做，不对 HTML 串做正则替换（本项目第五次守这条纪律）。
+ */
+CD.deadLinks = (root) => {
+  root.querySelectorAll('a:not([href])').forEach((a) => {
+    const raw = a.getAttribute('data-dead-href') || '';
+    const span = document.createElement('span');
+    span.className = 'dead-link';
+    // textContent 赋值，不拼 HTML —— raw 来自会话内容，是不可信的
+    span.textContent = raw && raw !== a.textContent
+      ? `${a.textContent}（${raw}）`
+      : a.textContent || raw;
+    span.title = '这个地址的协议不可点（只放行 http / https / mailto）';
+    a.replaceWith(span);
+  });
+};
+
+/* Markdown 渲染完之后统一过一遍的加工。
+ *
+ * 收成一个入口，是因为渲染点有好几个（回读、聊天…），而每加一道加工就要
+ * 挨个补一次调用——漏一处不会报错，只会那一处少了效果。 */
+CD.enhance = (root) => {
+  CD.highlightCodeBlocks(root);
+  CD.deadLinks(root);
+};
+
+/* ---------------- 工具结果里的源码 ---------------- */
+
+/* tool_result 占全部内容块的 38.9%（278k / 716k），是回读时占屏最大的一类。
+ * R7 给命令加了高亮，却把结果整类留在了外面——而 exec/Bash 的命令里
+ * **56.1% 是读文件类**（cat / sed -n / nl -ba / head / tail），它们的输出就是源码。
+ *
+ * 但**不能对输出做自动识别**：R7 立过「已知语言就别猜」，这里又有一个现成反例
+ * ——highlightAuto 把一段明显的 JavaScript 认成了 php。而结果里还有大量构建日志、
+ * traceback、git status，乱涂颜色比不上色更糟：它会让人以为那些颜色有含义。
+ *
+ * 所以判定只看**调用参数**，且两个条件必须同时成立：是读文件类命令 + 有已知扩展名。
+ * 实测这样能覆盖读文件类命令的 59.4%，剩下的保持现状。
+ */
+
+// 只认这些命令，且必须是**某一段的开头**。
+//
+// 光看"命令里有没有 cat/head"是不够的：`git status --short | head -5` 含 head、
+// `git diff x.go | head` 连扩展名都齐了——按前者的宽松规则会把一段 diff 涂成 Go 源码。
+// 实测 12000 条命令：宽松规则判出 5582 条，严格规则只判 1769 条，其中 110 条
+// 两者判成**不同**语言——抽查那些差异，严格版取的才是真正被读的那个文件
+// （`sed -n '512,532p' a.tsx; grep -n "X"` 里，宽松版取到了 grep 参数上的扩展名）。
+//
+// 覆盖降到约三分之一，但错色比不上色更糟：它会让人以为那些颜色有含义。
+const SEG_SPLIT = /\||;|&&/;
+const READ_HEAD = /^\s*(?:\S+=\S+\s+)*(cat|nl|head|tail|bat|sed)\b/;
+
+// 扩展名 → hljs 语言名。覆盖实测里出现过的十种加几个常见的；
+// **映射不到就是判不出**，不猜。
+const EXT_LANG = {
+  go: 'go', py: 'python', js: 'javascript', mjs: 'javascript', cjs: 'javascript',
+  ts: 'typescript', tsx: 'typescript', jsx: 'javascript',
+  rs: 'rust', java: 'java', rb: 'ruby', php: 'php', sh: 'bash', bash: 'bash',
+  c: 'c', h: 'c', cpp: 'cpp', hpp: 'cpp',
+  css: 'css', html: 'xml', xml: 'xml', json: 'json',
+  yaml: 'yaml', yml: 'yaml', toml: 'ini', ini: 'ini',
+  sql: 'sql', md: 'markdown', markdown: 'markdown',
+};
+
+const EXT_RE = /\.([A-Za-z0-9]+)\b/g;
+
+/* 从工具调用推断它的结果该按什么语言高亮；判不出返回空串。 */
+CD.resultLang = (toolName, callBody) => {
+  const text = String(callBody ?? '');
+  if (!text) return '';
+
+  // 先把参数解出来再判，**不要拿整段 JSON 去硬匹**：JSON 里命令被引号包着，
+  // `{"command":"cat x.go"}` 的 cat 前面是 `"` 而不是空白，
+  // 「命令以 cat 开头」这条正则会漏掉它。第一版就是这么写的，三种形态判错。
+  let obj = null;
+  try { obj = JSON.parse(text); } catch { return ''; }
+  if (!obj || typeof obj !== 'object') return '';
+
+  // Read 这类工具的路径就在参数里，不必解析命令
+  if (toolName === 'Read' || toolName === 'read_file') {
+    const p = obj.file_path || obj.path;
+    return p ? extLang(String(p)) : '';
+  }
+
+  const cmd = String(obj.command ?? obj.cmd ?? '');
+  if (!cmd) return '';
+  // 逐段看：只有以读取命令开头的那些段，它们的参数才算数
+  let lang = '';
+  for (const seg of cmd.split(SEG_SPLIT)) {
+    const h = READ_HEAD.exec(seg);
+    if (!h) continue;
+    if (h[1] === 'sed' && !/\s-n\b/.test(seg)) continue;  // sed 不加 -n 是流编辑，不是读取
+    const l = extLang(seg);
+    if (l) lang = l;
+  }
+  return lang;
+};
+
+/* 取最后一个能映射到语言的扩展名。
+ * 取最后一个而不是第一个：`sed -n '1,20p' a.go > /tmp/x.txt` 这种写法里，
+ * 前面的才是被读的文件——但更常见的是 `cat pkg/foo.go`，只有一个。
+ * 实测两种取法在语料上差异极小，取最后一个对管道更稳。 */
+function extLang(text) {
+  let lang = '';
+  EXT_RE.lastIndex = 0;
+  for (let m; (m = EXT_RE.exec(text)); ) {
+    const l = EXT_LANG[m[1].toLowerCase()];
+    if (l) lang = l;
+  }
+  return lang;
+}
+
+/* 每一行都带行号才剥。
+ *
+ * **必须全体匹配**：按行独立判断的话，一段普通日志里偶尔几行以数字开头就会被
+ * 吃掉数字。全体匹配才动手，是保守的那一侧。
+ *
+ * 返回 {nums, lines}（已剥离）或 null（不是带行号的输出）。 */
+const LN_RE = /^\s*(\d+)(?:\t| {0,2}[:|]?\t| +)(.*)$/;
+
+function splitLineNumbers(text) {
+  const src = text.split('\n');
+  // 末尾空行不参与判定，否则任何以换行结尾的文本都会被判为"不是"
+  const body = src.length > 1 && src[src.length - 1] === '' ? src.slice(0, -1) : src;
+  if (body.length < 2) return null;      // 一行看不出规律，不冒险
+  const nums = [], lines = [];
+  for (const ln of body) {
+    const m = LN_RE.exec(ln);
+    if (!m) return null;
+    nums.push(m[1]);
+    lines.push(m[2]);
+  }
+  return { nums, lines };
+}
+
+/* 渲染一条工具结果。lang 为空表示判不出——那就保持现状。 */
+CD.toolResult = (text, lang) => {
+  const t = String(text ?? '');
+  // 含 ANSI 的一律走 ANSI 路径：那是程序自己选的颜色，比我们按扩展名猜的准。
+  // 两种上色也不能叠加——语法高亮会把转义序列本身当成源码去分析。
+  if (!lang || t.includes('\x1b[')) return `<pre>${CD.ansi(t)}</pre>`;
+
+  const split = splitLineNumbers(t);
+  if (!split) return `<pre class="hljs">${CD.highlight(t, lang)}</pre>`;
+
+  // 逐行高亮会打断跨行的字符串与注释，所以整体高亮后再按行切开。
+  // hljs 的输出里 span 可能跨行，切开会产生不配对的标签——用 DOM 切，不用字符串切。
+  const html = CD.highlight(split.lines.join('\n'), lang);
+  const rows = splitHighlightedLines(html);
+  const out = rows.map((row, i) =>
+    `<span class="ln" data-n="${CD.esc(split.nums[i] || '')}">${row}</span>`).join('\n');
+  return `<pre class="hljs tr-code">${out}</pre>`;
+};
+
+/* 把高亮后的 HTML 按行切开，跨行的 span 在每行内各自闭合。
+ * 直接 split('\n') 会切出不配对的标签，浏览器会自作主张地补全，结果是错位的颜色。 */
+function splitHighlightedLines(html) {
+  const box = document.createElement('div');
+  box.innerHTML = html;
+  const rows = [''];
+  const walk = (node, open) => {
+    for (const child of node.childNodes) {
+      if (child.nodeType === 3) {
+        const parts = child.nodeValue.split('\n');
+        parts.forEach((part, i) => {
+          if (i > 0) rows.push(open.map((c) => `<span class="${c}">`).join(''));
+          rows[rows.length - 1] += CD.esc(part);
+        });
+      } else if (child.nodeType === 1) {
+        const cls = child.className || '';
+        rows[rows.length - 1] += `<span class="${CD.esc(cls)}">`;
+        walk(child, open.concat(cls));
+        rows[rows.length - 1] += '</span>';
+      }
+    }
+  };
+  walk(box, []);
+  return rows;
+}
+
+/* ---------------- mermaid（按需） ---------------- */
+
+/* 这个库 3.4 MB —— 比页面其余全部资产加起来还大一个量级。所以它**不在**
+ * index.html 里，页面初始零字节加载；只有真的要看图时才动态插 <script>。
+ *
+ * 默认显示源码而不是图：mermaid 块在语料里很少，而多数时候源码本身就读得懂
+ * （`A --> B`），为它默认吃 3.4 MB 不划算。想默认出图的人可以开 ui.mermaid_auto。
+ */
+CD.mermaidAuto = false;
+
+let mermaidLoad = null;
+function loadMermaid() {
+  if (mermaidLoad) return mermaidLoad;
+  mermaidLoad = new Promise((res, rej) => {
+    const sc = document.createElement('script');
+    sc.src = '/vendor/mermaid.min.js';
+    sc.onload = () => res(window.mermaid);
+    // 失败要把 promise 清空，否则一次网络抖动之后按钮永远点不动了
+    sc.onerror = () => { mermaidLoad = null; rej(new Error('mermaid 加载失败')); };
+    document.head.append(sc);
+  });
+  return mermaidLoad;
+}
+
+let mermaidSeq = 0;
+
+/* 把 <pre><code class="language-mermaid"> 换成「源码 + 渲染按钮」的可切换块。 */
+function mountMermaid(codeEl) {
+  const pre = codeEl.parentElement;
+  const src = codeEl.textContent;
+  const box = document.createElement('div');
+  box.className = 'mmd';
+  box.innerHTML = `<div class="mmd-bar"><button type="button" class="mmd-btn">渲染图表</button></div>`
+    + `<div class="mmd-out" hidden></div>`;
+  const code = document.createElement('pre');
+  code.className = 'mmd-src';
+  code.textContent = src;
+  box.append(code);
+  pre.replaceWith(box);
+
+  const btn = box.querySelector('.mmd-btn');
+  const out = box.querySelector('.mmd-out');
+  btn.addEventListener('click', () => {
+    if (!out.hidden) {                       // 已在看图 → 切回源码
+      out.hidden = true; code.hidden = false; btn.textContent = '渲染图表';
+      return;
+    }
+    if (out.dataset.done) {                  // 渲染过了，直接切回来
+      out.hidden = false; code.hidden = true; btn.textContent = '显示源码';
+      return;
+    }
+    btn.disabled = true; btn.textContent = '加载中…';
+    drawMermaid(src, out).then((ok) => {
+      btn.disabled = false;
+      if (!ok) { btn.textContent = '渲染图表'; return; }
+      out.dataset.done = '1';
+      out.hidden = false; code.hidden = true; btn.textContent = '显示源码';
+    });
+  });
+  // 不能直接读 CD.mermaidAuto：它由 /api/config 异步赋值，而这里是内容渲染完
+  // 就跑。两个请求谁先回来不定，输给它就静默不自动渲染——与"共 0 条摘要"同一种竞态。
+  (CD.cfgReady || Promise.resolve()).then(() => { if (CD.mermaidAuto) btn.click(); });
+}
+
+/* 渲染一张图。成功返回 true；任何失败都返回 false 并保留源码可见（需求 4.5）。 */
+async function drawMermaid(src, out) {
+  try {
+    const m = await loadMermaid();
+    // 每次渲染前都重新 initialize：放在加载那一步只会执行一次，之后切了明暗
+    // 主题再渲染的新图仍会沿用首次那套配色（实测确实如此）。重复调用是廉价的。
+    //
+    // htmlLabels: false 是必须的，不是偏好：mermaid 默认把节点文字放进
+    // <foreignObject> 里的 HTML，而 DOMPurify 的 svg profile 会把那段 HTML
+    // 整个剥掉——图还在，字全没了。关掉之后标签走原生 <text>，消毒后仍在。
+    m.initialize({ startOnLoad: false, securityLevel: 'strict',
+                   htmlLabels: false, flowchart: { htmlLabels: false },
+                   theme: CD.theme.isDark() ? 'dark' : 'default' });
+    const { svg } = await m.render('mmd-' + (++mermaidSeq), src);
+    // 渲染器的输出同样是不可信的：图里的标签文本来自会话内容，
+    // mermaid 自己也出过 XSS。SVG 走 DOMPurify 的 svg profile。
+    out.innerHTML = window.DOMPurify.sanitize(svg, {
+      USE_PROFILES: { svg: true, svgFilters: true },
+    });
+    return true;
+  } catch (e) {
+    console.warn('mermaid 渲染失败，保留源码', e);
+    // mermaid 失败时会往 body 塞一个残留容器，清掉免得占位
+    document.querySelectorAll('[id^="dmmd-"], [id^="mmd-"]').forEach((el) => {
+      if (el.parentElement === document.body) el.remove();
+    });
+    return false;
+  }
+}
 
 /* ---------------- 工具调用渲染 ---------------- */
 
@@ -192,7 +409,7 @@ CD.toolCall = (name, body) => {
     }
     // 不是 JSON 对象：exec 的 JS 源码走这条。不做语言探测——
     // "不是 JSON" 反推即可，猜语言只会猜错。
-    return `<pre class="tc-code">${CD.tint(text)}</pre>`;
+    return `<pre class="tc-code hljs">${CD.highlight(text)}</pre>`;
   } catch (e) {
     // 单条渲染失败不得影响同页其它消息（需求 Reliability）
     console.warn('工具调用渲染失败，退回原文', name, e);
@@ -239,7 +456,8 @@ function kvList(obj, keys) {
 function renderCmd(map, obj, rest) {
   const cmd = val(obj[map.primary]);
   const parts = [];
-  if (cmd) parts.push(`<div class="tc-cmd"><code>${CD.esc(cmd)}</code></div>`);
+  // 已经知道是 shell，直接指定——自动识别在单行命令上经常认错
+  if (cmd) parts.push(`<div class="tc-cmd"><code class="hljs">${CD.highlight(cmd, 'bash')}</code></div>`);
   const sub = map.sub ? val(obj[map.sub]) : '';
   if (sub) parts.push(`<div class="tc-sub">${CD.esc(sub)}</div>`);
   const ctx = (map.ctx || []).filter((k) => val(obj[k]) !== '')
@@ -300,12 +518,12 @@ function renderPatch(text) {
   const rows = String(text).split('\n').map((line) => {
     // 首字符（+/-）保持原样，其后的内容做轻量着色——
     // 这样 diff 的增删色仍由外层 span 决定，不被内层覆盖
-    const tinted = (pfx) => `${CD.esc(pfx)}${CD.tint(line.slice(pfx.length))}`;
+    const tinted = (pfx) => `${CD.esc(pfx)}${CD.esc(line.slice(pfx.length))}`;
     if (line.startsWith('*** ')) return `<span class="p-head">${CD.esc(line)}</span>`;
     if (line.startsWith('@@')) return `<span class="p-hunk">${CD.esc(line)}</span>`;
     if (line.startsWith('+')) return `<span class="p-add">${tinted('+')}</span>`;
     if (line.startsWith('-')) return `<span class="p-del">${tinted('-')}</span>`;
-    return CD.tint(line);
+    return CD.esc(line);
   });
   return `<pre class="tc-patch">${rows.join('\n')}</pre>`;
 }
@@ -396,11 +614,29 @@ CD.md = (src) => {
   if (!text.trim()) return '';
   try {
     const html = window.marked.parse(text, { breaks: true, gfm: true });
+    // 消毒器会把不合白名单的 href 删掉，连带**原地址也没了**。这是取证工具，
+    // `file:///etc/passwd` 这个字符串本身就是信息，不能连它一起丢。
+    // 所以在消毒前先把这类地址挪进 data-dead-href 留档（该属性只会被当成文本用）。
+    //
+    // 用 DOMParser 解析而不是正则改串：这段 HTML 尚未消毒，正则改它既容易改错、
+    // 也正是本项目反复栽过的那条。DOMParser 不执行脚本，且结果随后仍要过消毒器。
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    // 先清掉内容里自带的同名属性：会话正文可以写裸 HTML，若不清，
+    // 正文自带一个 data-dead-href 就能在界面上伪造出一个看起来正经的地址。
+    // 这个属性只能由下面这段代码写入。
+    //
+    //（注释里刻意不写 URL 字面量：TestNoRuntimeExternalRequests 按
+    // `href="http…` 这个形状匹配整个文件，注释里的样例会被它当成真的外链。）
+    doc.querySelectorAll('[data-dead-href]').forEach((el) => el.removeAttribute('data-dead-href'));
+    doc.querySelectorAll('a[href]').forEach((a) => {
+      const h = a.getAttribute('href') || '';
+      if (!MD_URI.test(h)) a.setAttribute('data-dead-href', h);
+    });
     // 围栏代码块着色：在**消毒之后**对文本节点做，不对 HTML 串做正则替换
-    return window.DOMPurify.sanitize(html, {
+    return window.DOMPurify.sanitize(doc.body.innerHTML, {
       // 收紧到 http/https/mailto：javascript: 与 data: 一律出局
       ALLOWED_URI_REGEXP: MD_URI,
-      ADD_ATTR: ['target', 'rel'],
+      ADD_ATTR: ['target', 'rel', 'data-dead-href'],
     });
   } catch (e) {
     // 宁可难看也不能吞内容（需求 Reliability）
@@ -426,19 +662,6 @@ const SESS_RE = /(?:会话\s*(?:id)?\s*[:：]?\s*#?|#)(\d+)/gi;
 /* 答案现在是 Markdown 渲染出来的 HTML，**不能再对 HTML 串做正则替换**——
  * 那会打断标签（比如把 <a href="...#12"> 里的 #12 也换掉）。
  * 改成消毒之后遍历文本节点，只在文本里替换，标签一概不碰。 */
-/* 给已渲染的 DOM 里的围栏代码块着色。
- *
- * 必须在**消毒之后、对 DOM** 做，不能对 HTML 串做正则替换——
- * 那会打断标签。与 CD.linkifySessions 同一条纪律（本项目第三次）。
- */
-CD.tintCodeBlocks = (root) => {
-  root.querySelectorAll('pre > code').forEach((el) => {
-    // 只处理纯文本的代码块；已经有子元素说明被别的东西处理过了，不重复上色
-    if (el.children.length) return;
-    el.innerHTML = CD.tint(el.textContent);
-  });
-};
-
 CD.linkifySessions = (root) => {
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   const targets = [];
@@ -507,7 +730,14 @@ CD.KIND_LABEL = {
 
 CD.api = async (path, opts) => {
   const r = await fetch(path, opts);
-  if (!r.ok) throw new Error(`${path} → ${r.status}`);
+  if (!r.ok) {
+    // 后端一直在下发 {"error": "人能看懂的原因"}，这里以前直接丢掉它，
+    // 于是「备份里也没有这个会话」在界面上显示成「→ 404」。
+    // 取不到 error 字段才退回 URL+状态码。
+    let reason = '';
+    try { reason = (await r.json()).error || ''; } catch { /* 不是 JSON */ }
+    throw new Error(reason || `${path} → ${r.status}`);
+  }
   return r.json();
 };
 
@@ -581,13 +811,13 @@ window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () 
 
 /* ---------------- 过滤条件（三个视图共用一份） ---------------- */
 
-CD.query = { q: '', source: '', kind: '', tool: '', project: '', from: '', to: '' };
+CD.query = { q: '', source: '', agent: '', kind: '', tool: '', project: '', from: '', to: '' };
 
 CD.queryParams = (extra = {}) => {
   const p = new URLSearchParams();
   const set = (k, v) => { if (v) p.set(k, v); };
   const q = CD.query;
-  set('q', q.q); set('source', q.source); set('kind', q.kind);
+  set('q', q.q); set('source', q.source); set('agent', q.agent); set('kind', q.kind);
   set('tool', q.tool); set('project', q.project);
   const day = (v, endOfDay) => {
     if (!v) return '';
@@ -601,7 +831,7 @@ CD.queryParams = (extra = {}) => {
 
 // 把 CD.query 同步到表单控件上（左栏点项目/时间后要反映到顶部）
 CD.syncFilterInputs = () => {
-  for (const id of ['source', 'kind', 'tool', 'from', 'to']) {
+  for (const id of ['source', 'agent', 'kind', 'tool', 'from', 'to']) {
     const el = CD.$(id);
     if (el) el.value = CD.query[id] || '';
   }
@@ -626,7 +856,7 @@ CD.view = 'search';
  * 未知路径实测返回 404，要支持路径式路由就得在服务端加 SPA 兜底。
  * 查询串则服务端一行都不用改。
  */
-const ROUTE_KEYS = ['q', 'source', 'kind', 'tool', 'project', 'from', 'to'];
+const ROUTE_KEYS = ['q', 'source', 'agent', 'kind', 'tool', 'project', 'from', 'to'];
 
 CD.route = {
   // location.search → {view, query, id, seq}
@@ -718,6 +948,8 @@ const NAV = [
   { id: 'timeline', label: '时间线', mini: '时' },
   { id: 'digest', label: '摘要', mini: '摘' },
   { id: 'chat', label: '问一问', mini: '问' },
+  { id: 'progress', label: '生成进度', mini: '度' },
+  { id: 'backup', label: '备份', mini: '备' },
   { id: 'settings', label: '设置', mini: '设' },
 ];
 
@@ -833,7 +1065,16 @@ function renderSummaryBar(s) {
     btn.hidden = true;
     return;
   }
-  const p = s.summary || {};
+  // summary 为 null 表示后端**取不到进度**，不是「进度是 0」。
+  // 用 `|| {}` 兜底会把它变成 done=0/total=0，进而算出 pending=0 →
+  // 进度条直接隐藏，看起来像「摘要都跑完了」。这正是本期要清的那类静默失效。
+  if (s.summary == null) {
+    bar.hidden = false;
+    CD.$('summary-progress').textContent = '摘要进度暂不可用';
+    btn.hidden = true;
+    return;
+  }
+  const p = s.summary;
   const total = (p.done || 0) + (p.pending || 0) + (p.running || 0) + (p.failed || 0);
   const pending = (p.pending || 0) + (p.running || 0);
   // 跑完了就别一直占着顶栏
@@ -865,9 +1106,49 @@ async function loadThemePick() {
   try {
     const cfg = await CD.api('/api/config');
     const ui = cfg?.values?.ui;
-    if (ui) CD.theme.setPick({ light: ui.light_theme, dark: ui.dark_theme });
+    if (ui) {
+      CD.theme.setPick({ light: ui.light_theme, dark: ui.dark_theme });
+      CD.setHighlight(ui.highlight);
+      CD.mermaidAuto = !!ui.mermaid_auto;
+    }
   } catch { /* 端点还没上线（任务 10 之前）或取不到，用本地镜像 */ }
 }
+
+/* 代码高亮配色。与 data-theme 同机制：给 <html> 打 data-hl，CSS 按它选。
+ *
+ * "theme" 是默认，不打属性——layout.css 里用 :root:not([data-hl]) 承接，
+ * 把 hljs 的类映射到既有 --ansi-* token，于是高亮天然跟着界面主题走。
+ * 其余是 highlight.js 官方配色，各自一个 <link>，按需启用。
+ */
+const HL_SETS = ['github', 'github-dark', 'nord', 'monokai', 'atom-one-dark'];
+
+CD.setHighlight = (name) => {
+  const d = document.documentElement;
+  if (!name || name === 'theme') {
+    delete d.dataset.hl;
+  } else if (HL_SETS.includes(name)) {
+    d.dataset.hl = name;
+  } else {
+    // 配置里写了不认识的名字：回退默认并记 warning，不白屏（与主题同处理）
+    console.warn(`未知高亮配色 ${name}，回退跟随主题`);
+    delete d.dataset.hl;
+  }
+  // 官方配色的样式表按需挂载，未选中的不加载
+  HL_SETS.forEach((n) => {
+    const id = 'hl-' + n;
+    const on = d.dataset.hl === n;
+    let el = document.getElementById(id);
+    if (on && !el) {
+      el = document.createElement('link');
+      el.id = id;
+      el.rel = 'stylesheet';
+      el.href = `/vendor/hljs/${n}.css`;
+      document.head.append(el);
+    } else if (!on && el) {
+      el.remove();
+    }
+  });
+};
 
 /* ---------------- 启动 ---------------- */
 
@@ -884,7 +1165,7 @@ CD.$('search-form').onsubmit = (e) => {
   else { CD.route.write(); CD.refresh(); }
 };
 
-for (const id of ['source', 'kind', 'tool', 'from', 'to']) {
+for (const id of ['source', 'agent', 'kind', 'tool', 'from', 'to']) {
   CD.$(id).onchange = () => {
     CD.query[id] = CD.$(id).value;
     // 调过滤用 replace：连调五次不该要按五次后退才能退出去（需求 1.8）
@@ -893,7 +1174,7 @@ for (const id of ['source', 'kind', 'tool', 'from', 'to']) {
   };
 }
 CD.$('filters-clear').onclick = () => {
-  CD.query = { q: '', source: '', kind: '', tool: '', project: '', from: '', to: '' };
+  CD.query = { q: '', source: '', agent: '', kind: '', tool: '', project: '', from: '', to: '' };
   CD.syncFilterInputs();
   CD.renderSide();
   CD.route.write({ replace: true });
@@ -901,13 +1182,20 @@ CD.$('filters-clear').onclick = () => {
 };
 
 CD.boot = () => {
+  // 就绪信号必须**先于挂载视图**建立。
+  //
+  // 这两行原本在 route.apply 之后，于是首个视图挂载时 CD.projectsReady 还是
+  // undefined —— 视图里 `(CD.projectsReady || Promise.resolve()).then(...)`
+  // 的兜底立刻兑现，等于完全没等，下拉里只剩一个「全部项目」。
+  // 与 R9 归纳的「同步读异步数据」是同一类，只是这次伪装成了「已经有门控了」。
+  CD.projectsReady = loadProjects();
+  CD.cfgReady = loadThemePick();
+
   CD.renderSide();
   // 从 URL 还原：直接访问一个带完整参数的链接（别人发来的/新标签页）
   // 要能重现同样的结果（需求 1.5）
   CD.route.apply(CD.route.read());
   loadStats();
-  loadProjects();
-  loadThemePick();
   setInterval(loadStats, 10000);
 };
 

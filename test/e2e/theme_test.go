@@ -134,11 +134,24 @@ func TestFocusRingIsVisible(t *testing.T) {
 	if !strings.Contains(css, ":focus-visible") {
 		t.Fatal("layout.css 里没有 :focus-visible 焦点环")
 	}
-	// 焦点环必须用主题 token：写死颜色的话，四套主题里总有一套看不见
-	i := strings.Index(css, ":focus-visible")
-	block := css[i:min(i+200, len(css))]
-	if !strings.Contains(block, "var(--") {
-		t.Error("焦点环用了写死的颜色，暗色主题下可能几乎不可见")
+	// 焦点环必须用主题 token：写死颜色的话，四套主题里总有一套看不见。
+	//
+	// 取样必须对准规则本身。第一版锚在第一个 ":focus-visible" 上——而那个出现在
+	// **注释里**（"用 :focus-visible 而非 :focus"），再叠一个 200 字节的定长窗口，
+	// 于是窗口横跨注释与规则、还能捞到后面别的规则里的 var(--)：把颜色写死也照样
+	// 通过。变异扫描把它揪了出来。（本项目在取样范围上栽的第六次，前五次是窗口
+	// 越界、匹到自己写的注释、锚点对不上、字节窗口太短、以及反方向的误报。）
+	i := strings.Index(css, ":focus-visible {")
+	if i < 0 {
+		t.Fatal("找不到 :focus-visible 规则（只有注释里提到它不算）")
+	}
+	end := strings.Index(css[i:], "}")
+	if end < 0 {
+		t.Fatal(":focus-visible 规则没有闭合")
+	}
+	rule := css[i : i+end]
+	if !strings.Contains(rule, "var(--") {
+		t.Errorf("焦点环用了写死的颜色，暗色主题下可能几乎不可见：%q", strings.TrimSpace(rule))
 	}
 
 	// input/select 的 outline: none 必须有替代（border-color + box-shadow）

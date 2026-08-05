@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"github.com/cygmris/chatdex/internal/backup"
 	"log/slog"
 	"net"
 	"net/http"
@@ -56,12 +57,26 @@ func runServe(args []string) error {
 	defer st.Close()
 
 	engine := search.NewEngine(st.DB())
-	api := &httpapi.Server{Engine: engine, Store: st}
+	api := &httpapi.Server{Engine: engine, Store: st, Reg: sc.Reg}
 
 	// LLM 是可选依赖：配不上或没起来，索引与检索照常，只是没有摘要、聊天置灰。
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	live := config.NewLive(cfg)
+	// restic 是可选依赖：Runner 总是构造，可用性由它自己在运行时探测——
+	// 与本地 LLM 同一模式，装没装都不影响服务能不能起来。
+	bk := &backup.Runner{Cfg: func() backup.Config {
+		c := live.Get().Backup
+		srcs := make([]backup.Source, 0, len(c.Sources))
+		for _, s := range c.Sources {
+			srcs = append(srcs, backup.Source{Path: s.Path, Enabled: s.Enabled})
+		}
+		return backup.Config{
+			Repo: c.Repo, PasswordFile: c.PasswordFile,
+			ResticPath: c.ResticPath, Sources: srcs,
+		}
+	}}
+	api.Backup = bk
 	api.Config = &configStore{
 		live: live, path: *cfgPath, newLLM: llm.NewOllama,
 	}
@@ -75,9 +90,19 @@ func runServe(args []string) error {
 		api.Chat = &chat.Agent{
 			LLM:   client,
 			Tools: &mcpserver.Tools{Engine: engine},
-			Live: func() (string, int) {
+			Projects: func() []search.ProjectStat {
+				ps, err := engine.Projects()
+				if err != nil {
+					return nil
+				}
+				return ps
+			},
+			Live: func() chat.Settings {
 				c := live.Get()
-				return c.Chat.Model, c.Chat.MaxToolRounds
+				return chat.Settings{
+					Model: c.Chat.Model, MaxRounds: c.Chat.MaxToolRounds,
+					NumCtx: c.LLM.NumCtx,
+				}
 			},
 		}
 		if w := startSummary(ctx, live, st, engine, client); w != nil {
@@ -91,7 +116,17 @@ func runServe(args []string) error {
 	mcpserver.Register(mux, engine)
 	dashboard.Register(mux)
 
-	go scanLoop(sc, live)
+	go scanLoop(sc, live, bk)
+
+	// 会话名回填：只跑一次，异步——它要扫全部源文件（实测 3.1 GB / 17 秒），
+	// 放同步路径上会让服务启动肉眼可见地卡一下，而检索本可以立刻用。
+	go func() {
+		if n, err := st.BackfillTitles(); err != nil {
+			slog.Warn("会话名回填失败", "err", err)
+		} else if n > 0 {
+			slog.Info("会话名已回填", "会话数", n)
+		}
+	}()
 
 	errc := make(chan error, 2)
 	serve := func(ln net.Listener, name string) {
@@ -116,9 +151,13 @@ func listen(port int) (net.Listener, error) {
 func startSummary(ctx context.Context, live *config.Live, st *index.Store, engine *search.Engine, client llm.Client) *summary.Worker {
 	w := &summary.Worker{
 		Store: st, Engine: engine, LLM: client,
-		Live: func() (string, int, bool) {
+		Live: func() summary.Settings {
 			c := live.Get()
-			return c.Summary.Model, c.Summary.ThrottleMS, c.Summary.Enabled
+			return summary.Settings{
+				Model: c.Summary.Model, ThrottleMS: c.Summary.ThrottleMS,
+				Enabled: c.Summary.Enabled, NumCtx: c.LLM.NumCtx,
+				Window: c.Summary.Window,
+			}
 		},
 	}
 	go w.Run(ctx)
@@ -127,8 +166,26 @@ func startSummary(ctx context.Context, live *config.Live, st *index.Store, engin
 	return w
 }
 
+// autoBackupGap 是「扫描后顺手备一次」两次之间的最小间隔。
+//
+// 扫描每 30 秒一轮，不限流的话活跃的一天能造出几百个快照——restic 靠去重
+// 不会白占空间，但快照列表会变得没法看。半小时够密了：真丢文件的场景是
+// 日常清理，不是秒级的。
+const autoBackupGap = 30 * time.Minute
+
+// autoBackupTimeout 是单次自动备份的上界，**必须小于 autoBackupGap**——
+// 这样两次自动备份不可能重叠，省掉一套并发控制。
+//
+// 上界是必需的而不是保险：restic 撞上过期的仓库锁会长时间重试，而这条
+// 路径原本跑在扫描循环里，一卡就是索引整个停下（需求 5.5 明确禁止）。
+// 实测 4.22 GB 全量 28 秒，20 分钟有 40 倍余量。
+const autoBackupTimeout = 20 * time.Minute
+
 // scanLoop 后台增量扫描，保持索引最新（需求 5.2）。
-func scanLoop(sc *index.Scanner, live *config.Live) {
+//
+// bk 可为 nil（备份是可选依赖）。
+func scanLoop(sc *index.Scanner, live *config.Live, bk *backup.Runner) {
+	var lastBackup time.Time
 	for {
 		c := live.Get()
 		// 截断阈值与开关也热生效（只影响之后新索引的内容，界面上已标注）
@@ -143,6 +200,26 @@ func scanLoop(sc *index.Scanner, live *config.Live) {
 		} else if rep.FilesIndexed > 0 || rep.MarkedDead > 0 {
 			slog.Info("增量索引完成", "files", rep.FilesIndexed, "blocks", rep.BlocksAdded,
 				"rebuilt", rep.Rebuilt, "dead", rep.MarkedDead)
+			// 只在真索引到东西之后才备：没有新内容时备一次纯属白跑。
+			// 备份失败只记日志——它绝不能影响索引与检索（需求 5.5）。
+			if bk != nil && c.Backup.AfterScan && time.Since(lastBackup) >= autoBackupGap {
+				lastBackup = time.Now()
+				// 异步 + 有上界：备份绝不能挡住下一轮扫描（需求 5.5）
+				go func() {
+					ctx, cancel := context.WithTimeout(context.Background(), autoBackupTimeout)
+					defer cancel()
+					res, err := bk.Backup(ctx)
+					// 结果记进 Runner，由 /api/backup/status 带到界面上——
+					// 只 slog 的话失败就只有 journalctl 里看得见（需求 5.3）
+					bk.RecordAuto(res, err)
+					if err != nil {
+						slog.Warn("扫描后自动备份失败", "err", err)
+					} else {
+						slog.Info("扫描后自动备份完成", "snapshot", res.SnapshotID,
+							"new", res.FilesNew, "bytes", res.BytesAdded)
+					}
+				}()
+			}
 		}
 		time.Sleep(time.Duration(intervalSec) * time.Second)
 	}

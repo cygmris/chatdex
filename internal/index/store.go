@@ -206,6 +206,8 @@ func (s *Store) Watermark(filePath string) (Watermark, bool, error) {
 	if err == sql.ErrNoRows {
 		return Watermark{}, false, nil
 	}
+	// err 照常返回给调用方——这里的 `err == nil` 只是把「取到了吗」独立成一个
+	// 返回值，不是吞掉错误。（R9 复核过，保留。）
 	return w, err == nil, err
 }
 
@@ -267,6 +269,8 @@ type Stats struct {
 func (s *Store) Stats() (Stats, error) {
 	st := Stats{BlocksByKind: map[string]int{}}
 	for _, p := range []string{s.path, s.path + "-wal", s.path + "-shm"} {
+		// 这里的 err 就是「文件不存在」本身，正是要判断的东西，不是被吞掉的错误。
+		// （R9 复核过，保留。）
 		if fi, err := os.Stat(p); err == nil {
 			st.DBBytes += fi.Size()
 		}

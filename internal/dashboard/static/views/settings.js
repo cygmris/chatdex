@@ -52,7 +52,8 @@
         </div>
       </div>`;
 
-    root.querySelectorAll('[data-key]').forEach((el) => {
+    bindSources();
+    root.querySelectorAll('[data-key]:not([data-kind="sources-part"])').forEach((el) => {
       el.oninput = el.onchange = () => {
         dirty[el.dataset.key] = el.type === 'checkbox' ? el.checked
           : (el.dataset.kind === 'int' || el.dataset.kind === 'bytes') ? Number(el.value)
@@ -62,6 +63,55 @@
     });
     CD.$('set-save').onclick = save;
     CD.$('set-reset').onclick = load;
+  }
+
+  /* 备份源列表编辑器。
+   *
+   * 与其它字段不同，它的值是对象数组。收集脏值时不能走通用那条路径
+   * （那条按 input 的 value 取标量），所以这里自己维护并整体写回 dirty。
+   */
+  function renderSources(id, key, list) {
+    const rows = list.map((s, i) => `
+      <div class="src-row" data-i="${i}">
+        <input type="checkbox" data-kind="sources-part" data-key="${key}" ${s.enabled ? 'checked' : ''}
+               title="是否备份这个目录">
+        <input type="text" data-kind="sources-part" data-key="${key}" value="${CD.esc(s.path || '')}"
+               placeholder="目录绝对路径">
+        <button type="button" class="ghost sm src-del" title="移除这一行">×</button>
+      </div>`).join('');
+    return `<div class="src-list" id="${id}" data-srckey="${key}">${rows}
+      <button type="button" class="ghost sm src-add">+ 添加目录</button></div>`;
+  }
+
+  function bindSources() {
+    root.querySelectorAll('.src-list').forEach((box) => {
+      const key = box.dataset.srckey;
+      const collect = () => {
+        const out = [...box.querySelectorAll('.src-row')].map((r) => ({
+          enabled: r.querySelector('input[type=checkbox]').checked,
+          path: r.querySelector('input[type=text]').value.trim(),
+        })).filter((s) => s.path !== '');
+        dirty[key] = out;
+        CD.$('set-msg').textContent = '有未保存的修改';
+      };
+      box.querySelectorAll('input').forEach((el) => { el.oninput = el.onchange = collect; });
+      box.querySelectorAll('.src-del').forEach((b) => {
+        b.onclick = () => { b.closest('.src-row').remove(); collect(); };
+      });
+      const add = box.querySelector('.src-add');
+      if (add) {
+        add.onclick = () => {
+          const row = document.createElement('div');
+          row.className = 'src-row';
+          row.innerHTML = `<input type="checkbox" checked><input type="text" placeholder="目录绝对路径">`
+            + `<button type="button" class="ghost sm src-del">×</button>`;
+          box.insertBefore(row, add);
+          row.querySelectorAll('input').forEach((el) => { el.oninput = el.onchange = collect; });
+          row.querySelector('.src-del').onclick = () => { row.remove(); collect(); };
+          row.querySelector('input[type=text]').focus();
+        };
+      }
+    });
   }
 
   function field(f) {
@@ -77,6 +127,11 @@
     } else if (f.kind === 'enum') {
       // 模型列表拿不到时退化为文本输入，而不是给一个空下拉（需求 4.7）
       input = `<input type="text" id="${id}" data-key="${f.key}" data-kind="string" value="${CD.esc(v)}">`;
+    } else if (f.kind === 'sources') {
+      // 备份源是「路径 + 勾选」的列表，不是一个标量。
+      // 单独一个分支而不是塞进文本框：勾选/取消是这里最主要的操作，
+      // 让人去编辑一段 JSON 字符串是把界面的活推给用户。
+      input = renderSources(id, f.key, Array.isArray(v) ? v : []);
     } else {
       const type = f.kind === 'int' || f.kind === 'bytes' ? 'number' : 'text';
       input = `<input type="${type}" id="${id}" data-key="${f.key}" data-kind="${f.kind}" value="${CD.esc(v)}"
@@ -142,6 +197,9 @@
           light: dirty['ui.light_theme'] || CD.theme.pick.light,
           dark: dirty['ui.dark_theme'] || CD.theme.pick.dark,
         });
+        // 外观类配置保存后立即生效，不必重启（Hot: true）
+        if ('ui.highlight' in dirty) CD.setHighlight(dirty['ui.highlight']);
+        if ('ui.mermaid_auto' in dirty) CD.mermaidAuto = !!dirty['ui.mermaid_auto'];
       }
       const needRestart = Object.keys(dirty).some(
         (k) => !fields.find((f) => f.key === k)?.hot);

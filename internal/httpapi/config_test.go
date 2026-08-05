@@ -97,7 +97,24 @@ func TestGetConfigCarriesMetaAndDefaults(t *testing.T) {
 	}
 }
 
-func toS(v any) string { b, _ := json.Marshal(v); return string(b) }
+// toS 把值规范化成可比较的字符串。
+//
+// 必须**往返一次**再序列化：结构体按字段声明序输出，而 JSON 往返后变成 map、
+// 按键的字母序输出——`{"path":..,"enabled":..}` 与 `{"enabled":..,"path":..}`
+// 内容相同却字符串不等。在 backup.sources 这类对象数组出现之前，
+// 所有配置值都是标量，这个差别不存在。
+//
+// （同一个「配置值都是标量」的假设也埋在 config.diffFromDefault 里，
+// 那边的表现是直接 panic。）
+func toS(v any) string {
+	b, _ := json.Marshal(v)
+	var any0 any
+	if json.Unmarshal(b, &any0) != nil {
+		return string(b)
+	}
+	out, _ := json.Marshal(any0)
+	return string(out)
+}
 
 // 界面上能填不等于能存（需求 4.5）。这条不因为「用户自己填的」就放宽。
 func TestPutConfigRejectsRemoteLLMEndpoint(t *testing.T) {

@@ -32,6 +32,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 	var body struct {
 		Question string `json:"question"`
+		// Project 是用户在界面上划的检索范围；空 = 全部项目。
+		// 服务端会把它作为硬约束注入检索工具，不只是提示词。
+		Project string `json:"project"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Question == "" {
 		writeErr(w, http.StatusBadRequest, "缺少 question")
@@ -57,7 +60,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		flusher.Flush()
 	}
 
-	if err := s.Chat.Ask(r.Context(), body.Question, send); err != nil {
+	if err := s.Chat.Ask(r.Context(), body.Question, chat.Scope{Project: body.Project}, send); err != nil {
 		send(chat.Event{Type: "note", Text: "出错了：" + err.Error()})
 	}
 	fmt.Fprint(w, "event: done\ndata: {}\n\n")

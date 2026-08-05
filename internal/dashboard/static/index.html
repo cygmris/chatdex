@@ -59,6 +59,11 @@
         <option value="claude">Claude Code</option>
         <option value="codex">Codex</option>
       </select>
+      <select id="agent" title="主会话 / 子代理">
+        <option value="">主会话与子代理</option>
+        <option value="main">仅主会话</option>
+        <option value="sub">仅子代理</option>
+      </select>
       <select id="kind" title="内容类型">
         <option value="">全部内容类型</option>
         <option value="user">仅我说的</option>
@@ -77,6 +82,7 @@
   </main>
 </div>
 
+<script src="/vendor/hljs/highlight.min.js"></script>
 <script src="/vendor/marked.min.js"></script>
 <script src="/vendor/purify.min.js"></script>
 <script src="/boot.js"></script>
@@ -86,5 +92,7 @@
 <script src="/views/chat.js"></script>
 <script src="/views/digest.js"></script>
 <script src="/views/settings.js"></script>
+<script src="/views/progress.js"></script>
+<script src="/views/backup.js"></script>
 </body>
 </html>

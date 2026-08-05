@@ -57,6 +57,29 @@ func toolDefs() []llm.ToolDef {
 }
 
 // call 执行一次工具调用，返回给模型看的 JSON 文本与命中数（供前端展示）。
+// applyScope 把用户划的范围**强制覆盖**到工具参数上。
+//
+// 只有这一处做注入。不能只写进提示词指望模型自觉——`list_projects` 在工具集里
+// 躺了两期，实测模型一次都没主动调用过（R13 的「模型能做不等于模型会做」）。
+// 范围错了更糟：agent 首轮没命中会自己改写查询重试，于是它会**在错误的范围里
+// 反复改写**，用户看到「搜了三轮都没找到」，而东西就在隔壁项目。
+//
+// 只约束检索类工具。get_session 已经定位到具体会话了，再拿范围挡它没有意义，
+// 而且会让「点开搜索结果」这条路径莫名其妙地失败。
+//
+// 返回新 map 而不是就地改：调用方还要把原始参数留在对话历史里，
+// 就地改会让历史与实际执行悄悄不一致。
+func applyScope(name string, args map[string]any, scope Scope) map[string]any {
+	out := make(map[string]any, len(args)+1)
+	for k, v := range args {
+		out[k] = v
+	}
+	if name == "search_sessions" && scope.Project != "" {
+		out["project"] = scope.Project
+	}
+	return out
+}
+
 func (a *Agent) call(name string, args map[string]any) (string, int, error) {
 	switch name {
 	case "search_sessions":

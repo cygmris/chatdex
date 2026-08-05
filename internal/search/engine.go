@@ -46,19 +46,26 @@ type Query struct {
 	Kinds    []string `json:"kinds"`     // user|assistant|tool_use|tool_result|summary
 	ToolName string   `json:"tool_name"` // 需求 7.3：「哪次用 rsync 部署的」
 	Source   string   `json:"source"`    // claude|codex
-	Project  string   `json:"project"`
-	From     int64    `json:"from"` // unix 秒，0 = 不限
-	To       int64    `json:"to"`
-	Limit    int      `json:"limit"`
-	Offset   int      `json:"offset"`
+	// Agent 三态："" 全部 | main 仅主会话 | sub 仅子 agent。
+	// 用字符串而不是布尔，是因为布尔只有两态，表达不了「全部」——而「全部」是默认值
+	// （子 agent 占 48.5%，默认隐藏等于默认藏掉一半语料）。
+	Agent   string `json:"agent"`
+	Project string `json:"project"`
+	From    int64  `json:"from"` // unix 秒，0 = 不限
+	To      int64  `json:"to"`
+	Limit   int    `json:"limit"`
+	Offset  int    `json:"offset"`
 }
 
 // SessionHit 是会话粒度的命中。
 type SessionHit struct {
-	ID          int64  `json:"id"`
-	Source      string `json:"source"`
-	SessionUID  string `json:"session_uid"`
+	ID         int64  `json:"id"`
+	Source     string `json:"source"`
+	SessionUID string `json:"session_uid"`
+	// AgentLabel 是随机标识（agent-<hex>，1554 个值全不重复），**不展示给用户**，
+	// 留着是因为它是从源文件读出来的原始字段。列表要的是 IsSub 这个是非判断。
 	AgentLabel  string `json:"agent_label,omitempty"`
+	IsSub       bool   `json:"is_sub,omitempty"`
 	FilePath    string `json:"file_path"` // 原始文件绝对路径（需求 3.4）
 	ProjectPath string `json:"project_path"`
 	StartedAt   int64  `json:"started_at"`
@@ -117,6 +124,24 @@ func BuildMatch(text string) string {
 }
 
 // filters 生成公共的 WHERE 片段。
+// agentFilter 是主会话 / 子 agent 的过滤片段。
+//
+// 独立成函数是因为检索与时间线各有一个过滤片段构造器（filters / sessionFilters），
+// 同一个条件写两遍，早晚有一边改了另一边没改——而表现是"时间线筛得对、检索筛不对"
+// 这种没人会立刻发现的偏差。
+//
+// 无参数、只回字符串：这个条件不需要占位符，拼进 SQL 的两个值都是字面量。
+// 认不出来的取值一律当「全部」——与主题名、高亮配色名同一条降级纪律。
+func (q Query) agentFilter() string {
+	switch q.Agent {
+	case "main":
+		return " AND s.parent_uid = ''"
+	case "sub":
+		return " AND s.parent_uid != ''"
+	}
+	return ""
+}
+
 func (q Query) filters() (string, []any) {
 	var sb strings.Builder
 	var args []any
@@ -135,6 +160,7 @@ func (q Query) filters() (string, []any) {
 		sb.WriteString(" AND s.source = ?")
 		args = append(args, q.Source)
 	}
+	sb.WriteString(q.agentFilter())
 	if q.Project != "" {
 		// 子目录下产生的会话也算「该工作目录下」
 		sb.WriteString(" AND (s.project_path = ? OR s.project_path LIKE ?)")
@@ -179,7 +205,7 @@ func (e *Engine) SearchSessions(q Query) (Result, error) {
 
 	rows, err := e.db.Query(`
 WITH f AS MATERIALIZED (`+ftsScoreCTE+`)
-SELECT s.id, s.source, s.session_uid, s.agent_label, s.file_path, s.project_path,
+SELECT s.id, s.source, s.session_uid, s.agent_label, s.parent_uid != '' AS is_sub, s.file_path, s.project_path,
        s.started_at, s.ended_at, s.msg_count, COALESCE(s.summary, ''),
        s.summary_model, s.summary_at, s.title,
        MIN(f.score) AS score, f.bid AS best_bid, COUNT(*) AS hits
@@ -202,7 +228,7 @@ LIMIT ? OFFSET ?`, append(append([]any{match}, args...), limit, offset)...)
 		var bid int64
 		// MIN() 的裸列取自产生该最小值的那一行——SQLite 对 min()/max() 有此保证，
 		// 于是 best_bid 就是该会话最相关的那个块。
-		if err := rows.Scan(&h.ID, &h.Source, &h.SessionUID, &h.AgentLabel, &h.FilePath,
+		if err := rows.Scan(&h.ID, &h.Source, &h.SessionUID, &h.AgentLabel, &h.IsSub, &h.FilePath,
 			&h.ProjectPath, &h.StartedAt, &h.EndedAt, &h.MsgCount, &h.Summary,
 			&h.SummaryModel, &h.SummaryAt, &h.Title,
 			&h.Score, &bid, &h.Hits); err != nil {
@@ -252,7 +278,7 @@ func (e *Engine) recentSessions(q Query) (Result, error) {
 	limit, offset := q.limit()
 
 	rows, err := e.db.Query(`
-SELECT s.id, s.source, s.session_uid, s.agent_label, s.file_path, s.project_path,
+SELECT s.id, s.source, s.session_uid, s.agent_label, s.parent_uid != '' AS is_sub, s.file_path, s.project_path,
        s.started_at, s.ended_at, s.msg_count, COALESCE(s.summary, ''),
        s.summary_model, s.summary_at, s.title
 FROM sessions s
@@ -269,7 +295,7 @@ LIMIT ? OFFSET ?`, append(args, limit, offset)...)
 	res := Result{Query: q}
 	for rows.Next() {
 		var h SessionHit
-		if err := rows.Scan(&h.ID, &h.Source, &h.SessionUID, &h.AgentLabel, &h.FilePath,
+		if err := rows.Scan(&h.ID, &h.Source, &h.SessionUID, &h.AgentLabel, &h.IsSub, &h.FilePath,
 			&h.ProjectPath, &h.StartedAt, &h.EndedAt, &h.MsgCount, &h.Summary,
 			&h.SummaryModel, &h.SummaryAt, &h.Title); err != nil {
 			return Result{}, err
@@ -356,10 +382,14 @@ type Message struct {
 type SessionView struct {
 	Title string `json:"title,omitempty"`
 	SessionHit
-	Alive    bool      `json:"alive"`
-	Total    int       `json:"total"`
-	FromSeq  int       `json:"from_seq"`
-	Messages []Message `json:"messages"`
+	Alive bool `json:"alive"`
+	// Parent 是主会话（仅当本会话是子代理且主会话在索引里）；ChildCount 是子代理数量。
+	// 回读页据此决定显示「← 属于主会话」还是「子代理 (N)」。
+	Parent     *SessionHit `json:"parent,omitempty"`
+	ChildCount int         `json:"child_count"`
+	Total      int         `json:"total"`
+	FromSeq    int         `json:"from_seq"`
+	Messages   []Message   `json:"messages"`
 }
 
 // GetSession 按时间正序返回会话消息，支持分页以免一次性渲染上万条（需求 3.3 / 4.2）。
@@ -370,14 +400,14 @@ func (e *Engine) GetSession(id int64, fromSeq, limit int) (SessionView, error) {
 	var v SessionView
 	var alive int
 	err := e.db.QueryRow(`
-SELECT s.id, s.source, s.session_uid, s.agent_label, s.file_path, s.project_path,
+SELECT s.id, s.source, s.session_uid, s.agent_label, s.parent_uid != '' AS is_sub, s.file_path, s.project_path,
        s.started_at, s.ended_at, s.msg_count, COALESCE(s.summary,''),
        s.summary_model, s.summary_at, s.title, s.alive,
        -- seq>=0 才是对话消息：摘要块存在 seq=-1，它进 FTS 但不进回读列表，
        -- 若计入总数，分页器会多出一页永远空的「下一页」
        (SELECT COUNT(*) FROM blocks WHERE session_id = s.id AND seq >= 0)
 FROM sessions s WHERE s.id = ?`, id).
-		Scan(&v.ID, &v.Source, &v.SessionUID, &v.AgentLabel, &v.FilePath, &v.ProjectPath,
+		Scan(&v.ID, &v.Source, &v.SessionUID, &v.AgentLabel, &v.IsSub, &v.FilePath, &v.ProjectPath,
 			&v.StartedAt, &v.EndedAt, &v.MsgCount, &v.Summary,
 			&v.SummaryModel, &v.SummaryAt, &v.Title, &alive, &v.Total)
 	if err != nil {
@@ -385,6 +415,25 @@ FROM sessions s WHERE s.id = ?`, id).
 	}
 	v.Alive = alive == 1
 	v.FromSeq = fromSeq
+
+	// 父子关系：两次很轻的查询（都走 sessions_parent 索引），换回读页不必再猜。
+	// 单独取子代理**数量**而不是列表——绝大多数会话是 0，取列表纯属浪费。
+	if v.IsSub {
+		p, err := e.Parent(id)
+		if err != nil {
+			// Parent 已经把「没有父会话」和「查询出错」分开了，这里不能再合回去：
+			// 吞掉出错就等于把 DB 故障显示成"这个子代理没有主会话"。
+			return v, err
+		}
+		v.Parent = p
+	}
+	if err := e.db.QueryRow(`
+SELECT COUNT(*) FROM sessions c JOIN sessions p ON p.session_uid = c.parent_uid
+WHERE p.id = ? AND c.alive = 1`, id).Scan(&v.ChildCount); err != nil {
+		// 数错了不是小事：回读页据此决定显不显示入口，count 归零会让一个挂着
+		// 350 个子代理的会话看起来一个都没有
+		return v, err
+	}
 
 	rows, err := e.db.Query(`
 SELECT seq, ts, kind, tool_name, tool_use_id, truncated, raw_bytes, body
@@ -431,6 +480,33 @@ GROUP BY project_path ORDER BY MAX(ended_at) DESC`)
 			return nil, err
 		}
 		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// SessionFile 是一个会话的文件位置与存活状态。
+type SessionFile struct {
+	Path  string
+	Alive bool
+}
+
+// AllSessionFiles 列出索引里全部会话的文件路径与存活状态，供备份覆盖率校验用。
+//
+// 放在这里而不是 handler 里直接查库：本包的规矩是「所有查询一律走
+// search.Engine，handler 里不得写 SQL」（见 httpapi 包注释）。
+func (e *Engine) AllSessionFiles() ([]SessionFile, error) {
+	rows, err := e.db.Query(`SELECT file_path, alive FROM sessions`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []SessionFile
+	for rows.Next() {
+		var f SessionFile
+		if err := rows.Scan(&f.Path, &f.Alive); err != nil {
+			return nil, err
+		}
+		out = append(out, f)
 	}
 	return out, rows.Err()
 }

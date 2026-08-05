@@ -61,8 +61,13 @@ WHERE s.alive = 1
   AND s.msg_count > 0
   AND (s.summary IS NULL
        OR s.msg_count > MAX(s.summary_msg_count * ?, s.summary_msg_count + ?))
+  -- failed 也必须排除。少了它，下面的 ON CONFLICT 会把失败任务重置回 pending
+  -- 且 attempts 清零 —— FailSummary 那句「重试 3 次后置 failed，不再占着队列」
+  -- 被完全抵消，于是一条生成不了的会话每 2 分钟复活一次、永远排在最前面，
+  -- 其余任务全部饿死。**实测这样卡了两天，而 failed 计数因为活不过一轮恒为 0，
+  -- 界面上完全看不出来。** 失败要重来只能显式触发（RetrySummary/RetryAllFailed）。
   AND NOT EXISTS (SELECT 1 FROM summary_queue q
-                  WHERE q.session_id = s.id AND q.state IN ('pending','running'))
+                  WHERE q.session_id = s.id AND q.state IN ('pending','running','failed'))
 ON CONFLICT(session_id) DO UPDATE SET
     priority = excluded.priority,
     state = 'pending', attempts = 0, err = '', updated_at = excluded.updated_at`,
@@ -176,4 +181,88 @@ func (s *Store) SummaryProgress() (Progress, error) {
     (SELECT COUNT(*) FROM summary_queue WHERE state='failed')`).
 		Scan(&p.Done, &p.Pending, &p.Running, &p.Failed)
 	return p, err
+}
+
+// Failure 是一条失败任务的展示信息。
+type Failure struct {
+	SessionID int64  `json:"session_id"`
+	Title     string `json:"title,omitempty"`
+	Summary   string `json:"summary,omitempty"`
+	Err       string `json:"err"`
+	Attempts  int    `json:"attempts"`
+	UpdatedAt int64  `json:"updated_at"`
+}
+
+// Failures 返回失败清单与**总数**。
+//
+// 总数单独查，不用 len(items)：limit 会截断，而界面要显示「共 N 条失败」——
+// 拿返回条数当总数会永远显示 limit（R8 的 Children 栽过同一处）。
+func (s *Store) Failures(limit int) ([]Failure, int, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	var total int
+	if err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM summary_queue WHERE state='failed'`).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	if total == 0 {
+		return nil, 0, nil
+	}
+	rows, err := s.db.Query(`
+SELECT q.session_id, s.title, COALESCE(s.summary,''), q.err, q.attempts, q.updated_at
+FROM summary_queue q
+JOIN sessions s ON s.id = q.session_id
+WHERE q.state = 'failed'
+ORDER BY q.updated_at DESC
+LIMIT ?`, limit)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	var out []Failure
+	for rows.Next() {
+		var f Failure
+		if err := rows.Scan(&f.SessionID, &f.Title, &f.Summary,
+			&f.Err, &f.Attempts, &f.UpdatedAt); err != nil {
+			return nil, 0, err
+		}
+		out = append(out, f)
+	}
+	return out, total, rows.Err()
+}
+
+// RetrySummary 把一条失败任务放回队列。返回是否真的有这条失败任务。
+func (s *Store) RetrySummary(sessionID int64) (bool, error) {
+	res, err := s.db.Exec(`UPDATE summary_queue
+SET state='pending', attempts=0, err='', updated_at=?
+WHERE session_id=? AND state='failed'`, time.Now().Unix(), sessionID)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
+// RetryAllFailed 把全部失败任务放回队列，返回条数。
+func (s *Store) RetryAllFailed() (int, error) {
+	res, err := s.db.Exec(`UPDATE summary_queue
+SET state='pending', attempts=0, err='', updated_at=?
+WHERE state='failed'`, time.Now().Unix())
+	if err != nil {
+		return 0, err
+	}
+	n, err := res.RowsAffected()
+	return int(n), err
+}
+
+// Throughput 返回最近 1 小时 / 24 小时完成的摘要数。
+// 取 sessions.summary_at 这个既有字段，不为此新增采样表。
+func (s *Store) Throughput() (lastHour, last24h int, err error) {
+	now := time.Now().Unix()
+	err = s.db.QueryRow(`SELECT
+    (SELECT COUNT(*) FROM sessions WHERE summary_at > ?),
+    (SELECT COUNT(*) FROM sessions WHERE summary_at > ?)`,
+		now-3600, now-86400).Scan(&lastHour, &last24h)
+	return
 }

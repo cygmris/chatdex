@@ -36,19 +36,31 @@ type Worker struct {
 	Store  *index.Store
 	Engine *search.Engine
 	LLM    llm.Client
-	// Live 返回当前生效的模型名、限速与启用开关。
+	// Live 返回当前生效的配置。
 	//
-	// 这里不存 Model/ThrottleMS 字段：拷成字段的那一刻，这两项就变成
-	// 需重启才能改的了，而使用者从设置页上看不出区别（需求 4.3）。
-	Live func() (model string, throttleMS int, enabled bool)
+	// 这里不存字段：拷成字段的那一刻，这些项就变成需重启才能改的了，
+	// 而使用者从设置页上看不出区别（需求 4.3）。
+	//
+	// 返回结构体而不是多返回值：R11 一次要加 NumCtx 与 Window 两项，
+	// 元组每加一项就要改全部调用点，且位置写反了编译器也未必拦得住。
+	Live func() Settings
 
 	paused atomic.Bool
 }
 
+// Settings 是 worker 每轮重新读取的那几项配置。
+type Settings struct {
+	Model      string
+	ThrottleMS int
+	Enabled    bool
+	NumCtx     int
+	Window     string // 生成时间窗口 "HH:MM-HH:MM"，空 = 不限
+}
+
 // cfg 取当前生效的配置；没接 Live 时（测试）用固定值。
-func (w *Worker) cfg() (string, int, bool) {
+func (w *Worker) cfg() Settings {
 	if w.Live == nil {
-		return "test-model", 0, true
+		return Settings{Model: "test-model", Enabled: true, NumCtx: 8192}
 	}
 	return w.Live()
 }
@@ -71,9 +83,20 @@ func (w *Worker) Run(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		_, _, enabled := w.cfg()
-		if w.Paused() || !enabled {
+		set := w.cfg()
+		if w.Paused() || !set.Enabled {
 			if sleepCtx(ctx, pausedWait) {
+				return
+			}
+			continue
+		}
+		// 时间窗口只管生成：窗口外索引扫描与检索照常，
+		// 与「LLM 不可用不得整体不可用」同一条纪律。
+		if in, _, err := InWindow(set.Window, time.Now()); err != nil {
+			// 配置填错不该让摘要静默停摆——回退为不限，只告警
+			slog.Warn("生成时间窗口配置非法，按不限处理", "window", set.Window, "err", err)
+		} else if !in {
+			if sleepCtx(ctx, idleWait) {
 				return
 			}
 			continue
@@ -121,7 +144,7 @@ func (w *Worker) Run(ctx context.Context) {
 			slog.Info("摘要完成", "session", id, "耗时", time.Since(start).Round(time.Millisecond))
 		}
 
-		_, throttle, _ := w.cfg()
+		throttle := w.cfg().ThrottleMS
 		if sleepCtx(ctx, time.Duration(throttle)*time.Millisecond) {
 			return
 		}
@@ -156,7 +179,7 @@ func (w *Worker) summarizeAndStore(ctx context.Context, sessionID int64) error {
 	if text == "" {
 		return fmt.Errorf("模型返回空摘要")
 	}
-	model, _, _ := w.cfg()
+	model := w.cfg().Model
 	return w.Store.SetSummary(sessionID, text, model, msgCount)
 }
 
@@ -170,7 +193,20 @@ func (w *Worker) Summarize(ctx context.Context, sessionID int64) (string, int, e
 		return "", 0, errNoContent
 	}
 
-	chunks := Split(Distill(msgs))
+	set := w.cfg()
+	text := Distill(msgs)
+	chunks := Split(text, BudgetFor(set.NumCtx))
+	// 分段与省略必须看得见：省略是正常降级，但「悄悄少看了一半」不是。
+	elided := 0
+	for _, c := range chunks {
+		if c.Elided {
+			elided++
+		}
+	}
+	slog.Info("摘要分段", "session", sessionID, "抽稀字符", len([]rune(text)),
+		"段数", len(chunks), "调用次数", len(chunks)+boolToInt(len(chunks) > 1),
+		"发生省略的段", elided, "num_ctx", set.NumCtx)
+
 	if len(chunks) == 1 {
 		sys, prompt := SinglePrompt(chunks[0].Text)
 		out, err := w.gen(ctx, sys, prompt)
@@ -193,9 +229,10 @@ func (w *Worker) Summarize(ctx context.Context, sessionID int64) (string, int, e
 }
 
 func (w *Worker) gen(ctx context.Context, system, prompt string) (string, error) {
-	model, _, _ := w.cfg()
+	set := w.cfg()
 	out, err := w.LLM.Generate(ctx, llm.GenerateRequest{
-		Model: model, System: system, Prompt: prompt, NumPredict: 256,
+		Model: set.Model, System: system, Prompt: prompt,
+		NumPredict: 256, NumCtx: set.NumCtx, NoThink: true,
 	})
 	if err != nil {
 		return "", err
@@ -235,4 +272,11 @@ func (w *Worker) loadMessages(sessionID int64) ([]search.Message, int, error) {
 			return all, total, nil
 		}
 	}
+}
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }

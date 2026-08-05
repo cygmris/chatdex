@@ -7,11 +7,14 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"github.com/cygmris/chatdex/internal/backup"
+	"io"
 	"net/http"
 
 	"github.com/cygmris/chatdex/internal/chat"
 
 	"github.com/cygmris/chatdex/internal/index"
+	"github.com/cygmris/chatdex/internal/parser"
 	"github.com/cygmris/chatdex/internal/search"
 )
 
@@ -24,9 +27,21 @@ type Summarizer interface {
 }
 
 // Chatter 是聊天助手的最小接口。为 nil 表示本地 LLM 不可用，入口置灰。
+// Backuper 是备份能力的最小接口。可为 nil —— restic 是可选依赖，
+// 不可用时备份入口置灰而索引与检索完全不受影响。
+type Backuper interface {
+	Available(ctx context.Context) backup.Status
+	Backup(ctx context.Context) (backup.Result, error)
+	Snapshots(ctx context.Context) ([]backup.Snapshot, error)
+	Coverage(ctx context.Context, sessions []backup.IndexedSession) (backup.Coverage, error)
+	Fetch(ctx context.Context, path string) (io.ReadCloser, error)
+	LastAuto() *backup.AutoResult
+	Init(ctx context.Context) error
+}
+
 type Chatter interface {
 	Available(ctx context.Context) bool
-	Ask(ctx context.Context, question string, emit func(chat.Event)) error
+	Ask(ctx context.Context, question string, scope chat.Scope, emit func(chat.Event)) error
 }
 
 // Server 持有各端共用的依赖。
@@ -40,6 +55,11 @@ type Server struct {
 	ChatUnavailableReason string
 	// Config 可为 nil（理论上不会，留给测试）。
 	Config ConfigStore
+	// Backup 可为 nil（restic 是可选依赖，与 Chat 同一模式）。
+	Backup Backuper
+	// Reg 用于解析从备份里取回的原件。与索引用的是同一套解析器——
+	// 备份里的原件和源目录里的文件是同一种东西，两套解析必然漂移。
+	Reg *parser.Registry
 }
 
 // Register 把 API 路由挂到 mux 上。
@@ -49,11 +69,20 @@ type Server struct {
 func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/search", s.handleSearch)
 	mux.HandleFunc("GET /api/session/{id}", s.handleSession)
+	mux.HandleFunc("GET /api/session/{id}/children", s.handleChildren)
+	mux.HandleFunc("GET /api/session/{id}/archived", s.handleArchived)
 	mux.HandleFunc("GET /api/timeline", s.handleTimeline)
 	mux.HandleFunc("GET /api/projects", s.handleProjects)
 	mux.HandleFunc("GET /api/stats", s.handleStats)
 	mux.HandleFunc("POST /api/summary/pause", s.handleSummaryPause)
 	mux.HandleFunc("POST /api/summary/resume", s.handleSummaryResume)
+	mux.HandleFunc("POST /api/summary/retry", s.handleSummaryRetry)
+	mux.HandleFunc("GET /api/summary/progress", s.handleSummaryProgress)
+	mux.HandleFunc("GET /api/backup/status", s.handleBackupStatus)
+	mux.HandleFunc("POST /api/backup/run", s.handleBackupRun)
+	mux.HandleFunc("POST /api/backup/init", s.handleBackupInit)
+	mux.HandleFunc("GET /api/backup/coverage", s.handleBackupCoverage)
+	mux.HandleFunc("GET /api/backup/snapshots", s.handleBackupSnapshots)
 	mux.HandleFunc("GET /api/chat/status", s.handleChatStatus)
 	mux.HandleFunc("POST /api/chat", s.handleChat)
 	mux.HandleFunc("GET /api/config", s.handleGetConfig)

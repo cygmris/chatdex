@@ -44,16 +44,19 @@ chatdex has a specific answer to each, with measured numbers behind it — see
 
 | | |
 |---|---|
-| 🔍 **Mixed CJK/ASCII full-text search** | Per-character CJK splitting over FTS5. Median latency **23 ms** on a real 3 176-session / 632 K-block corpus |
+| 🔍 **Mixed CJK/ASCII full-text search** | Per-character CJK splitting over FTS5. Median latency **37 ms** on a real 3 265-session / 747 K-block corpus |
 | 🧠 **Summaries are indexed too** | A local LLM writes one line per session, **rephrasing in conceptual terms** — which is what closes the vocabulary gap above |
-| 💬 **Ask** | Ask in plain language; the LLM rewrites its query and retries across rounds, and **shows you every query it tried** |
+| 💬 **Ask** | Ask in plain language; the LLM rewrites its query and retries across rounds, and **shows you every query it tried**; scope it to a single project or ask across everything |
 | 🏷 **Session names** | A name you set with `/rename` takes precedence over the LLM summary — what you called it beats what a model guessed |
 | 🕘 **Timeline & transcript replay** | Grouped by project; click through to read the original exchange, paginated for long sessions |
-| 📝 **Markdown & ANSI rendering** | Assistant output renders as Markdown; ANSI colours in command output are coloured. One click switches the transcript back to **raw bytes** |
+| 🧬 **Subagents linked up** | Nearly half the sessions are subagents (48.5% on this machine). Filter to main sessions only or subagents only; expand a main session to see the subagents it dispatched, and jump back from a subagent to its parent |
+| 📝 **Markdown, ANSI & syntax highlighting** | Assistant output renders as Markdown; ANSI colours in command output are coloured; code and commands are syntax-highlighted (colour scheme selectable, the default follows the interface theme); mermaid diagrams render on click. One click switches the transcript back to **raw bytes** |
 | 🔗 **Shareable links** | View, query, every filter, and the session you're reading all live in the URL — send it to someone and they get the same result. The back button works too |
 | 🔌 **MCP endpoint** | Your agent can look up "how did I solve this last time" by itself |
 | 🎨 **Four themes** | Light/dark/follow-system, all contrast ratios verified against WCAG AA by script |
 | ⚙️ **Settings UI** | Change config in the browser; most options take effect immediately |
+| 📈 **Generation progress** | Where summarising is up to, how long is left, which sessions failed and why, one-click retry; and a **time window** so it only runs when you want (e.g. `02:00-08:00` overnight, wrapping past midnight is fine) |
+| 🗄 **Backups (via restic)** | restic keeps it safe; chatdex answers what restic cannot — **are the sessions you indexed actually in the backup?** — and reads an original back once its source file is gone. restic is optional |
 | 🔒 **Read-only, localhost-only** | See [Security boundaries](#security-boundaries) |
 
 ## Quick start
@@ -105,7 +108,8 @@ Three tools: `search_sessions`, `get_session`, `list_projects`.
 
 ## Screenshots
 
-> All screenshots use **synthetic demo data** — 120 fabricated sessions across 4 fictional projects.
+> All screenshots use **synthetic demo data** — 57 fabricated sessions across 5 fictional projects.
+> The generator is in the repo: [`scripts/gen-demo-corpus.py`](scripts/gen-demo-corpus.py), so you can verify that claim.
 > Not anyone's real transcripts.
 
 ### Search: summary as the headline, snippet as evidence
@@ -117,10 +121,19 @@ The snippet below it shows *why* it matched.
 
 ### Filter down to the tool call
 
-Six filters: source, content kind, tool name, project, and date range. Filtering to tool calls is how
-you answer "how did I write that command last time" — the match lands right on the command itself.
+Seven filters: source, **main session / subagent**, content kind, tool name, project, and date range.
+Filtering to tool calls is how you answer "how did I write that command last time" — the match lands
+right on the command itself.
 
 ![Filtered search](docs/images/search-filters.png)
+
+### Subagents linked up
+
+Nearly half the sessions are subagents (1591 of 3265 on this machine). They used to sit in the results
+with no way to tell them apart or filter them out. Now you can view main sessions only or subagents
+only; a main session expands to the subagents it dispatched, and a subagent links back to its parent.
+
+![Subagents](docs/images/subagents.png)
 
 ### Summaries
 
@@ -145,12 +158,57 @@ Grouped by project, newest first — useful for "what was I even doing that week
 ### Transcript replay
 
 Read the original exchange message by message. Assistant output renders as Markdown, ANSI colours
-in command output are coloured, and **tool calls render structurally** — a command looks like a command
+in command output are coloured, code blocks and commands are **syntax-highlighted** (highlight.js is
+bundled; pick a scheme in Settings, or keep the default that follows the interface theme). The
+**output** of file-reading commands (`cat`, `sed -n`, …) is highlighted too — the language comes from
+the filename in the command, and when it can't be determined the output is left alone; output is
+**never** auto-detected, which would just paint build logs at random. Mermaid
+diagrams show their source until you click *Render*, and **tool calls render structurally** — a command looks like a command
 (copy it and it runs), a file edit shows before/after, a patch shows as a coloured diff. One click switches to **raw** —
 this is a forensic tool, and sometimes the exact stored bytes are the point. The session id lives in
 the URL, so reloading or sharing lands in the same place.
 
 ![Transcript replay](docs/images/reader.png)
+
+Syntax highlighting and on-click mermaid rendering (the renderer is 3.4 MB and is not fetched unless
+you ask for a diagram):
+
+![Syntax highlighting and diagrams](docs/images/reader-highlight.png)
+
+The **output** of a file-reading command is highlighted as source, while the `go test` output right
+below it stays plain — the language is inferred from the command only, and nothing is painted when it
+can't be:
+
+![Highlighted command output](docs/images/output-highlight.png)
+
+### Generation progress
+
+Summaries are generated in the background. This page says where it is, how long is left, and
+**which sessions failed and why** — retry them one by one or all at once. You can also confine
+generation to a time window, so it runs overnight instead of competing for your GPU during the day.
+
+![Generation progress](docs/images/progress.png)
+
+### Backups
+
+restic sees paths; it has no idea what a session is. This page answers the question restic cannot —
+it checks every session in the index against the latest snapshot and splits the result four ways:
+**covered / not backed up (source still there) / permanently lost / source gone but in the backup**.
+The middle two are both "not backed up", but one is fixed by ticking a directory in Settings and the
+other is gone forever — collapsing them into one number would be a lie.
+
+![Backups](docs/images/backup.png)
+
+Sessions in the last group can be read **straight from the backup** in the transcript view — and that
+copy is *more complete* than the index: tool results are deliberately truncated when indexed
+(4096 bytes by default), so the full text only exists in the original. The UI shows a
+`restic restore` command you can copy, but never runs it for you.
+
+![Reading the original from the backup](docs/images/archived.png)
+
+chatdex is **not a wrapper around restic**: no scheduling, no retention policy, and it never runs a
+restore for you (the UI just shows a command you can copy). Without restic installed, indexing and
+search are unaffected — the backup entry points are greyed out with the reason shown.
 
 ### Settings
 
@@ -181,7 +239,7 @@ each covered by tests:
 The config file is `0600` too, written via `.tmp → chmod → rename` so a power cut can't leave half a
 JSON behind.
 
-## This is **not** a backup
+## The index is **not** a backup (that is restic's job)
 
 The index stores *derived* text, not a copy of the original. Measured: 5.9 GB of source transcripts
 became 549 MB of indexed text (~9%). The gap is JSONL structural overhead plus these deliberate losses:
@@ -191,19 +249,32 @@ became 549 MB of indexed text (~9%). The gap is JSONL structural overhead plus t
 - The `CLAUDE.md` / `AGENTS.md` text injected into every session's first message is **stripped**
 
 The original `.jsonl` files remain the only source of truth; every record stores their absolute path
-and offset so it can point back. **For backups, use a backup tool.**
+and offset so it can point back.
+
+**Backups are restic's job; chatdex only does the part restic cannot.** The split: restic handles
+*keeping it safe* — content-addressed dedup, compression, encryption, `restic check`. chatdex handles
+what restic has no way of knowing — which paths matter, **whether the sessions you indexed are
+actually in the backup**, and how to read an original back once its source file is gone. restic sees
+paths; it has no idea what a session is.
+
+chatdex is **not a wrapper around restic**: no scheduling (that is what a systemd timer is for),
+no retention policy, and it never performs a restore for you (the read-only rule applies to recovery
+too — the UI shows a command you can copy). restic is an **optional dependency**: without it,
+indexing and search work exactly as before and the backup entry points explain why they are greyed out.
 
 ## Measured
 
 Real corpus on real hardware, not a synthetic benchmark:
 
+All from one measurement run on 2026-08-05 (historical comparison in [architecture.md](docs/architecture.md)):
+
 | | |
 |---|---|
-| Sessions / blocks | 3 176 / 632 322 |
-| Index size | 1.0 GB (full index in 13 min 0 s) |
-| Search latency | median **23 ms**; 19 of 20 real queries under 260 ms |
-| Slowest query | 342 ms — a single common CJK character matching ~100 K blocks |
-| Summary throughput | median 0.8 s/session; all 3 176 done in **2 h 13 min** |
+| Sessions / blocks | 3 265 (3 082 alive, 183 whose source file is gone) / 747 153 |
+| Indexed text / index size | 0.59 GB / 3.1 GB |
+| Search latency | median **37 ms**, p95 113 ms |
+| Slowest query | 529 ms — the single CJK character 的, matching 121 K blocks |
+| Summary throughput | median 0.8 s/session; full run took **2 h 13 min** (measured 2026-07-29, not re-run) |
 
 ## The two JSONL formats differ (read before writing a parser)
 
@@ -250,7 +321,11 @@ License 1.1; full text at `internal/dashboard/static/fonts/LICENSE.txt`. Bundlin
 the page references no external domain, so it works offline and leaks nothing about your browsing to
 a third party.
 
-Markdown rendering uses two libraries, also bundled (and likewise referencing no external domain):
-[marked](https://github.com/markedjs/marked) (MIT) and
-[DOMPurify](https://github.com/cure53/DOMPurify) (Apache-2.0 / MPL-2.0).
+Rendering uses four libraries, also bundled (and likewise referencing no external domain):
+[marked](https://github.com/markedjs/marked) (MIT),
+[DOMPurify](https://github.com/cure53/DOMPurify) (Apache-2.0 / MPL-2.0),
+[highlight.js](https://github.com/highlightjs/highlight.js) (BSD-3-Clause) and
+[mermaid](https://github.com/mermaid-js/mermaid) (MIT).
+mermaid weighs 3.4 MB and is **never part of the initial load** — it is fetched only when you click
+*Render* on a diagram.
 Full license texts live in `internal/dashboard/static/vendor/`.

@@ -10,6 +10,7 @@ type TimelineSession struct {
 	ID         int64  `json:"id"`
 	Source     string `json:"source"`
 	AgentLabel string `json:"agent_label,omitempty"`
+	IsSub      bool   `json:"is_sub,omitempty"`
 	FilePath   string `json:"file_path"`
 	StartedAt  int64  `json:"started_at"`
 	EndedAt    int64  `json:"ended_at"`
@@ -51,6 +52,7 @@ func (q Query) sessionFilters() (string, []any) {
 		sb.WriteString(" AND s.started_at <= ?")
 		args = append(args, q.To)
 	}
+	sb.WriteString(q.agentFilter())
 	return sb.String(), args
 }
 
@@ -68,7 +70,7 @@ func (e *Engine) Timeline(q Query) ([]ProjectGroup, error) {
 	}
 
 	rows, err := e.db.Query(`
-SELECT s.id, s.source, s.agent_label, s.file_path, s.project_path,
+SELECT s.id, s.source, s.agent_label, s.parent_uid != '' AS is_sub, s.file_path, s.project_path,
        s.started_at, s.ended_at, s.msg_count,
        COALESCE(NULLIF(s.summary, ''), '') AS summary,
        s.title,
@@ -89,7 +91,7 @@ LIMIT ? OFFSET ?`, append(args, limit, offset)...)
 	for rows.Next() {
 		var t TimelineSession
 		var project, summary, firstUser, title string
-		if err := rows.Scan(&t.ID, &t.Source, &t.AgentLabel, &t.FilePath, &project,
+		if err := rows.Scan(&t.ID, &t.Source, &t.AgentLabel, &t.IsSub, &t.FilePath, &project,
 			&t.StartedAt, &t.EndedAt, &t.MsgCount, &summary, &title, &firstUser); err != nil {
 			return nil, err
 		}

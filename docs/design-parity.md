@@ -1,7 +1,6 @@
 # 对稿记录（dashboard-redesign）
 
-定案稿：claude-design 上的
-`chatdex 2 · 1d 落地 + 四主题.dc.html`。
+定案稿：claude-design 上的 `chatdex 2 · 1d 落地 + 四主题.dc.html`（内部设计稿，未公开）。
 
 需求 2.6 要求「与设计稿的偏离逐条记录并说明原因，不得静默简化」。以下是全部偏离。
 
