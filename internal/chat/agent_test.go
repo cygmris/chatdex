@@ -20,16 +20,18 @@ type scriptedLLM struct {
 	seen  [][]llm.Message
 	i     int
 	// lastTools 记录最后一轮拿到的工具列表（验证收口时不再给工具）
-	lastTools []llm.ToolDef
+	lastTools  []llm.ToolDef
+	lastNumCtx int
 }
 
 func (s *scriptedLLM) Available(context.Context) bool { return true }
 func (s *scriptedLLM) Generate(context.Context, llm.GenerateRequest) (string, error) {
 	return "", nil
 }
-func (s *scriptedLLM) Chat(_ context.Context, _ string, msgs []llm.Message, tools []llm.ToolDef) (llm.ChatResponse, error) {
-	s.seen = append(s.seen, append([]llm.Message(nil), msgs...))
-	s.lastTools = tools
+func (s *scriptedLLM) Chat(_ context.Context, req llm.ChatRequest) (llm.ChatResponse, error) {
+	s.seen = append(s.seen, append([]llm.Message(nil), req.Messages...))
+	s.lastTools = req.Tools
+	s.lastNumCtx = req.NumCtx
 	if s.i >= len(s.steps) {
 		return llm.ChatResponse{Content: "（脚本用尽）"}, nil
 	}
@@ -69,7 +71,7 @@ func newAgent(t *testing.T, steps ...llm.ChatResponse) (*chat.Agent, *scriptedLL
 func collect(t *testing.T, a *chat.Agent, q string) []chat.Event {
 	t.Helper()
 	var evs []chat.Event
-	if err := a.Ask(context.Background(), q, func(e chat.Event) { evs = append(evs, e) }); err != nil {
+	if err := a.Ask(context.Background(), q, chat.Scope{}, func(e chat.Event) { evs = append(evs, e) }); err != nil {
 		t.Fatal(err)
 	}
 	return evs
@@ -221,7 +223,7 @@ func TestAgentMarksBudgetExhaustion(t *testing.T) {
 	a := &chat.Agent{LLM: f, Model: "test", MaxRounds: 8,
 		Tools: &mcpserver.Tools{Engine: search.NewEngine(st.DB())}}
 
-	if err := a.Ask(context.Background(), "读点东西", func(chat.Event) {}); err != nil {
+	if err := a.Ask(context.Background(), "读点东西", chat.Scope{}, func(chat.Event) {}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -260,4 +262,95 @@ func TestAgentToolsMatchMCPTools(t *testing.T) {
 		t.Errorf("agent 侧命中 %d，直接调工具命中 %d —— 两边不是同一份实现",
 			viaAgent, len(direct.Sessions))
 	}
+}
+
+// 问答链路必须把 num_ctx 传下去。
+//
+// R11 只修了摘要走的 /api/generate；问答走 /api/chat，是另一个函数、另一个端点，
+// **没有任何东西提示它也需要同样的参数**，于是同一个坑隔一天就在这里重演了：
+// 实测被截在 2051 token。而问答会累积多轮历史与检索结果，截断从 prompt 头部切，
+// 最先丢的正是系统提示与用户的问题——表现是答非所问，且不报错。
+func TestChatPassesNumCtx(t *testing.T) {
+	a, f := newAgent(t, llm.ChatResponse{Content: "答案"})
+	a.Live = func() chat.Settings {
+		return chat.Settings{Model: "m", MaxRounds: 2, NumCtx: 32768}
+	}
+	if err := a.Ask(context.Background(), "问题", chat.Scope{}, func(chat.Event) {}); err != nil {
+		t.Fatal(err)
+	}
+	if f.lastNumCtx != 32768 {
+		t.Errorf("问答请求带的 num_ctx = %d，want 32768 —— 不传就会吃服务端默认值并被静默截断",
+			f.lastNumCtx)
+	}
+}
+
+// 用户划的范围必须**强制覆盖**模型给的参数，不能只写进提示词。
+//
+// 理由不是洁癖：agent 首轮没命中会自己改写查询重试（R10 的核心设计），
+// 范围错了它会**在错误的范围里反复改写**——用户看到「搜了三轮都没找到」，
+// 而东西就在隔壁项目。而且「模型能做不等于模型会做」已经有前例：
+// list_projects 在工具集里躺了两期，实测一次都没被主动调用过。
+func TestScopeOverridesModelChoice(t *testing.T) {
+	// 模型故意给一个别的项目
+	a, f := newAgent(t, llm.ChatResponse{ToolCalls: []llm.ToolCall{{
+		Name: "search_sessions",
+		Args: map[string]any{"query": "限流", "project": "/模型自己挑的项目"},
+	}}}, llm.ChatResponse{Content: "答案"})
+
+	var args map[string]any
+	if err := a.Ask(context.Background(), "问题", chat.Scope{Project: "/用户划的范围"},
+		func(e chat.Event) {
+			if e.Type == "tool" && e.Tool == "search_sessions" {
+				args = e.Args
+			}
+		}); err != nil {
+		t.Fatal(err)
+	}
+	if got := args["project"]; got != "/用户划的范围" {
+		t.Errorf("范围没被强制覆盖：实际执行的 project=%v，want /用户划的范围", got)
+	}
+	_ = f
+}
+
+// 范围为空时不得注入 project——那会把「全部项目」变成「某个空路径」。
+func TestEmptyScopeInjectsNothing(t *testing.T) {
+	a, f := newAgent(t, llm.ChatResponse{ToolCalls: []llm.ToolCall{{
+		Name: "search_sessions", Args: map[string]any{"query": "限流"},
+	}}}, llm.ChatResponse{Content: "答案"})
+
+	var args map[string]any
+	if err := a.Ask(context.Background(), "问题", chat.Scope{},
+		func(e chat.Event) {
+			if e.Type == "tool" {
+				args = e.Args
+			}
+		}); err != nil {
+		t.Fatal(err)
+	}
+	if v, ok := args["project"]; ok {
+		t.Errorf("空范围不该注入 project，实得 %v", v)
+	}
+	_ = f
+}
+
+// get_session 不受范围影响：已经定位到具体会话了，再拿范围挡它会让
+// 「点开搜索结果」这条路径莫名其妙地失败。
+func TestScopeDoesNotBlockGetSession(t *testing.T) {
+	a, f := newAgent(t, llm.ChatResponse{ToolCalls: []llm.ToolCall{{
+		Name: "get_session", Args: map[string]any{"session_id": float64(1)},
+	}}}, llm.ChatResponse{Content: "答案"})
+
+	var args map[string]any
+	if err := a.Ask(context.Background(), "问题", chat.Scope{Project: "/某项目"},
+		func(e chat.Event) {
+			if e.Type == "tool" && e.Tool == "get_session" {
+				args = e.Args
+			}
+		}); err != nil {
+		t.Fatal(err)
+	}
+	if v, ok := args["project"]; ok {
+		t.Errorf("get_session 不该被注入 project，实得 %v", v)
+	}
+	_ = f
 }

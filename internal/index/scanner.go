@@ -34,7 +34,26 @@ type Report struct {
 	MarkedDead   int
 	Rebuilt      int  // 因截断/改写而从头重建的会话数
 	SizeCapped   bool // 索引库触顶，已停止新增
-	DBBytes      int64
+	// SizeUnknown 表示本轮**没能读到**库体积，因而体积上限未被校验。
+	// 它与 SizeCapped 是两件事：一个是「已封顶」的结论，一个是「不知道有没有封顶」。
+	// 把后者当成前者的反面（即"没超限"）正是这次要修的那类静默失效。
+	SizeUnknown bool
+	DBBytes     int64
+}
+
+// classifySize 判定本轮的体积检查结论。**三态，不可压成两态。**
+//
+// 抽成函数有两个理由：一是它在 Scanner 里没法测（Store 是具体类型，
+// 注入不了一个会失败的 Stats()）；二是这条判定正是本项目栽过的那类错误——
+// 原写法 `err == nil && bytes >= max` 在 Stats() 出错时整个条件为假，
+// 与「没超限」完全同义，于是体积上限守卫静默关闭、索引继续无限增长。
+//
+// 「不知道有没有超」和「确认没超」是两个结论，不能共用一个 false。
+func classifySize(bytes, max int64, err error) (capped, unknown bool) {
+	if err != nil {
+		return false, true
+	}
+	return bytes >= max, false
 }
 
 // 水位判定的五种情形，与 design.md「增量变更检测」表一一对应。
@@ -117,7 +136,12 @@ func (s *Scanner) ScanOnce() (Report, error) {
 	}
 
 	st, err := s.Store.Stats()
-	if err == nil {
+	if err != nil {
+		// 量不到体积不该让整轮索引失败（与「LLM 不可用不得整体不可用」同一条纪律），
+		// 但必须留下痕迹——否则报告里的 DBBytes=0 会被当成真值。
+		slog.Warn("读取索引库体积失败，本轮报告的体积不可信", "err", err)
+		rep.SizeUnknown = true
+	} else {
 		rep.DBBytes = st.DBBytes
 	}
 	return rep, nil
@@ -195,7 +219,17 @@ func (s *Scanner) indexFile(p parser.Parser, path string, rep *Report) error {
 
 	// 每写完一个文件检查一次体积上限：超限停止新增，但不删任何数据
 	if s.Cfg.MaxBytes > 0 {
-		if st, err := s.Store.Stats(); err == nil && st.DBBytes >= s.Cfg.MaxBytes {
+		// 三态，不是两态。原来写的是 `err == nil && st.DBBytes >= MaxBytes`——
+		// Stats() 一出错整个条件为假，与「没超限」完全同义，于是**体积上限守卫
+		// 静默关闭、索引继续无限增长，日志里一个字都没有**。而这个守卫存在的
+		// 全部意义就是防无限增长。
+		st, err := s.Store.Stats()
+		capped, unknown := classifySize(st.DBBytes, s.Cfg.MaxBytes, err)
+		switch {
+		case unknown:
+			slog.Warn("读取索引库体积失败，本轮未能校验体积上限", "err", err)
+			rep.SizeUnknown = true
+		case capped:
 			rep.SizeCapped = true
 			slog.Warn("索引库已达体积上限，停止索引新增内容（检索照常，不会删除历史数据）",
 				"db_bytes", st.DBBytes, "max_bytes", s.Cfg.MaxBytes)

@@ -23,6 +23,7 @@ func newEngine(t *testing.T) (*index.Store, *search.Engine) {
 
 type seed struct {
 	uid, project, source string
+	parent               string // 非空 = 子 agent，指向父会话的 uid
 	blocks               []model.Block
 }
 
@@ -35,7 +36,8 @@ func seedSessions(t *testing.T, st *index.Store, seeds ...seed) map[string]int64
 			src = model.SourceClaude
 		}
 		id, err := st.UpsertSession(model.SessionMeta{
-			Source: src, SessionUID: s.uid, FilePath: "/sessions/" + s.uid + ".jsonl",
+			Source: src, SessionUID: s.uid, ParentUID: s.parent,
+			FilePath:    "/sessions/" + s.uid + ".jsonl",
 			ProjectPath: s.project, StartedAt: 1000, EndedAt: 2000,
 		})
 		if err != nil {
@@ -336,5 +338,138 @@ func TestTitleIsNotFullTextIndexed(t *testing.T) {
 	}
 	if len(got.Sessions) != 1 || got.Sessions[0].Title != title {
 		t.Errorf("会话名没随结果返回：%+v", got.Sessions)
+	}
+}
+
+// 主会话 / 子 agent 三态过滤。
+//
+// 断言写成**互补性**而不是逐条点名：main 与 sub 必须无交集，且并集等于不过滤时的
+// 全集。这条能咬住"两个分支写反了"——那种错误下逐条断言仍然可能各自通过
+// （每边都返回了非空且形态正确的结果），只有互补性会立刻崩。
+func TestAgentFilterPartitionsResults(t *testing.T) {
+	st, e := newEngine(t)
+	seedSessions(t, st,
+		seed{uid: "m1", project: "/p", blocks: repeatBlocks("assistant", "限流 中间件", 1)},
+		seed{uid: "m2", project: "/p", blocks: repeatBlocks("assistant", "限流 网关", 1)},
+		seed{uid: "s1", project: "/p", parent: "m1", blocks: repeatBlocks("assistant", "限流 令牌桶", 1)},
+		seed{uid: "s2", project: "/p", parent: "m1", blocks: repeatBlocks("assistant", "限流 滑动窗口", 1)},
+		seed{uid: "s3", project: "/p", parent: "m2", blocks: repeatBlocks("assistant", "限流 压测", 1)},
+	)
+
+	// text 为空时 SearchSessions 走的是 recentSessions 那条分支——检索页首屏
+	// 正是这个状态。两条分支都要验，只验带关键词的会漏掉最常见的那个。
+	for _, text := range []string{"限流", ""} {
+		assertPartition(t, e, text)
+	}
+}
+
+func assertPartition(t *testing.T, e *search.Engine, text string) {
+	t.Helper()
+	ids := func(agent string) map[int64]bool {
+		res, err := e.SearchSessions(search.Query{Text: text, Agent: agent})
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := map[int64]bool{}
+		for _, h := range res.Sessions {
+			out[h.ID] = true
+			// 顺带验 IsSub 与所选分支自洽
+			switch agent {
+			case "main":
+				if h.IsSub {
+					t.Errorf("agent=main 的结果里出现了子 agent：%d", h.ID)
+				}
+			case "sub":
+				if !h.IsSub {
+					t.Errorf("agent=sub 的结果里出现了主会话：%d", h.ID)
+				}
+			}
+		}
+		return out
+	}
+
+	all, main, sub := ids(""), ids("main"), ids("sub")
+	if len(all) != 5 || len(main) != 2 || len(sub) != 3 {
+		t.Fatalf("text=%q 条数不对：全部 %d（应 5）主 %d（应 2）子 %d（应 3）",
+			text, len(all), len(main), len(sub))
+	}
+	for id := range main {
+		if sub[id] {
+			t.Errorf("会话 %d 同时出现在 main 与 sub 里", id)
+		}
+	}
+	for id := range all {
+		if !main[id] && !sub[id] {
+			t.Errorf("会话 %d 不在 main 也不在 sub —— 两者的并集不等于全集", id)
+		}
+	}
+}
+
+// 认不出来的取值当「全部」，不报错也不返回空——与主题名、高亮配色名同一条降级纪律。
+func TestUnknownAgentValueFallsBackToAll(t *testing.T) {
+	st, e := newEngine(t)
+	seedSessions(t, st,
+		seed{uid: "m1", project: "/p", blocks: repeatBlocks("assistant", "限流", 1)},
+		seed{uid: "s1", project: "/p", parent: "m1", blocks: repeatBlocks("assistant", "限流", 1)},
+	)
+	for _, bad := range []string{"MAIN", "subagent", "true", "1", "'"} {
+		res, err := e.SearchSessions(search.Query{Text: "限流", Agent: bad})
+		if err != nil {
+			t.Fatalf("agent=%q 报错了：%v", bad, err)
+		}
+		if len(res.Sessions) != 2 {
+			t.Errorf("agent=%q 返回 %d 条，应当等同于「全部」的 2 条", bad, len(res.Sessions))
+		}
+	}
+}
+
+// Codex 侧没有子 agent，选「仅子 agent」应当正常返回空而不是报错（需求 1.5）。
+func TestSubFilterWithCodexSourceReturnsEmpty(t *testing.T) {
+	st, e := newEngine(t)
+	seedSessions(t, st,
+		seed{uid: "c1", project: "/p", source: "codex", blocks: repeatBlocks("assistant", "限流", 1)},
+		seed{uid: "m1", project: "/p", blocks: repeatBlocks("assistant", "限流", 1)},
+		seed{uid: "s1", project: "/p", parent: "m1", blocks: repeatBlocks("assistant", "限流", 1)},
+	)
+	res, err := e.SearchSessions(search.Query{Text: "限流", Source: "codex", Agent: "sub"})
+	if err != nil {
+		t.Fatalf("不该报错：%v", err)
+	}
+	if len(res.Sessions) != 0 {
+		t.Errorf("codex + 仅子 agent 应当为空，实际 %d 条", len(res.Sessions))
+	}
+}
+
+// 时间线与检索共用同一处 agent 过滤片段（agentFilter），不能只有一边生效。
+func TestTimelineHonorsAgentFilter(t *testing.T) {
+	st, e := newEngine(t)
+	seedSessions(t, st,
+		seed{uid: "m1", project: "/p", blocks: repeatBlocks("assistant", "限流", 1)},
+		seed{uid: "s1", project: "/p", parent: "m1", blocks: repeatBlocks("assistant", "限流", 1)},
+		seed{uid: "s2", project: "/p", parent: "m1", blocks: repeatBlocks("assistant", "限流", 1)},
+	)
+	count := func(agent string) (n int, subs int) {
+		gs, err := e.Timeline(search.Query{Agent: agent})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, g := range gs {
+			for _, s := range g.Sessions {
+				n++
+				if s.IsSub {
+					subs++
+				}
+			}
+		}
+		return
+	}
+	if n, _ := count(""); n != 3 {
+		t.Errorf("时间线不过滤应有 3 条，实际 %d", n)
+	}
+	if n, subs := count("main"); n != 1 || subs != 0 {
+		t.Errorf("时间线 agent=main 应有 1 条主会话，实际 %d 条其中 %d 个子 agent", n, subs)
+	}
+	if n, subs := count("sub"); n != 2 || subs != 2 {
+		t.Errorf("时间线 agent=sub 应有 2 条子 agent，实际 %d 条其中 %d 个子 agent", n, subs)
 	}
 }

@@ -1,0 +1,445 @@
+[
+ {
+  "test": "TestMarkdownPipelineKeepsSanitizer",
+  "pkg": "./test/e2e/",
+  "file": "internal/dashboard/static/boot.js",
+  "find": "return window.DOMPurify.sanitize(doc.body.innerHTML, {",
+  "replace": "return doc.body.innerHTML; window.DOMPurify.sanitize(doc.body.innerHTML, {",
+  "why": "跳过消毒 —— marked 裸输出会原样透传 script 与 javascript: href"
+ },
+ {
+  "test": "TestANSIEscapesBeforeParsing",
+  "pkg": "./test/e2e/",
+  "file": "internal/dashboard/static/boot.js",
+  "find": "const chunk = CD.esc(text.slice(last, upto));",
+  "replace": "const chunk = text.slice(last, upto);",
+  "why": "ANSI 分片不再转义 —— 工具输出里的 HTML 会被原样注入"
+ },
+ {
+  "test": "TestViewsDoNotTouchHistoryDirectly",
+  "pkg": "./test/e2e/",
+  "file": "internal/dashboard/static/views/search.js",
+  "find": "(() => {",
+  "replace": "(() => { const _x = location.search;",
+  "why": "视图直接读 location.search —— 路由该集中在 CD.route"
+ },
+ {
+  "test": "TestVendoredLibsAndLicensesShipped",
+  "pkg": "./test/e2e/",
+  "file": "internal/dashboard/static/vendor/LICENSE-marked.txt",
+  "find": "MIT",
+  "replace": "XXX",
+  "why": "许可文本被改坏 —— 分发时的许可违约没有其它信号",
+  "all": true
+ },
+ {
+  "test": "TestNoRuntimeExternalRequests",
+  "pkg": "./test/e2e/",
+  "file": "internal/dashboard/static/views/search.js",
+  "find": "(() => {",
+  "replace": "(() => { fetch('https://cdn.example.com/x.json');",
+  "why": "页面真的去外部域名取数据 —— 离线不可用且泄露浏览行为"
+ },
+ {
+  "test": "TestToolCallRenderingInvariants",
+  "pkg": "./test/e2e/",
+  "file": "internal/dashboard/static/boot.js",
+  "find": "const TOOL_MAP",
+  "replace": "const TOOL_MAP2 = 0; const TOOL_MAP",
+  "why": "TOOL_MAP 声明两次 —— 两张表会慢慢漂移"
+ },
+ {
+  "test": "TestMermaidLoadedOnDemandOnly",
+  "pkg": "./test/e2e/",
+  "file": "internal/dashboard/static/index.html",
+  "find": "</body>",
+  "replace": "  <script src=\"/vendor/mermaid.min.js\"></script>\n</body>",
+  "why": "mermaid 进首屏 —— 3.4 MB，功能一切正常所以没人会发现"
+ },
+ {
+  "test": "TestHighlightThemeUsesExistingTokens",
+  "pkg": "./test/e2e/",
+  "file": "internal/dashboard/static/layout.css",
+  "find": ":root:not([data-hl]) .hljs-built_in { color: var(--ansi-magenta); }",
+  "replace": ":root:not([data-hl]) .hljs-built_in { color: #ff00ff; }",
+  "why": "跟随主题的高亮写死颜色 —— 总有一套主题下看不见"
+ },
+ {
+  "test": "TestSubagentBadgeKeysOffIsSub",
+  "pkg": "./test/e2e/",
+  "file": "internal/dashboard/static/views/search.js",
+  "find": "s.is_sub ?",
+  "replace": "s.agent_label ?",
+  "why": "标记挂回随机标识 —— 与筛选各说各话"
+ },
+ {
+  "test": "TestReaderRelationsAreLazyAndLabelFree",
+  "pkg": "./test/e2e/",
+  "file": "internal/dashboard/static/views/reader.js",
+  "find": "    cur.total = v.total;",
+  "replace": "    cur.total = v.total;\n    await CD.api(`/api/session/${cur.id}/children`);",
+  "why": "子代理列表在 load() 里就取 —— 98% 的回读白发一个请求"
+ },
+ {
+  "test": "TestStrippedLinksDoNotLookClickable",
+  "pkg": "./test/e2e/",
+  "file": "internal/dashboard/static/boot.js",
+  "find": "root.querySelectorAll('a:not([href])')",
+  "replace": "root.querySelectorAll('a[data-never]')",
+  "why": "不处理被剥 href 的链接 —— 留下点了没反应的死链"
+ },
+ {
+  "test": "TestAntiFlashInlineScriptIsInHead",
+  "pkg": "./test/e2e/",
+  "file": "internal/dashboard/static/index.html",
+  "find": "</body>",
+  "replace": "<script>window.__x=1</script>\n</body>",
+  "why": "多出第二段内联脚本 —— 首屏之前会跑什么变得不确定"
+ },
+ {
+  "test": "TestClickableThingsAreFocusable",
+  "pkg": "./test/e2e/",
+  "file": "internal/dashboard/static/views/search.js",
+  "find": "CD.clickable",
+  "replace": "void 0 || (el => el).call, ",
+  "why": "条目不再走 CD.clickable —— 键盘用户搜到了却打不开",
+  "all": true
+ },
+ {
+  "test": "TestFocusRingIsVisible",
+  "pkg": "./test/e2e/",
+  "file": "internal/dashboard/static/layout.css",
+  "find": "  outline: 2px solid var(--accent);",
+  "replace": "  outline: 2px solid #3355ff;",
+  "why": "焦点环写死颜色 —— 某套主题下几乎看不见"
+ },
+ {
+  "test": "TestSearchThenRead",
+  "pkg": "./test/e2e/",
+  "file": "internal/httpapi/handlers.go",
+  "find": "res, err := s.Engine.SearchSessions(parseQuery(r))",
+  "replace": "res, err := s.Engine.SearchSessions(search.Query{})",
+  "why": "检索忽略查询参数 —— 永远返回最近会话"
+ },
+ {
+  "test": "TestTimeline",
+  "pkg": "./test/e2e/",
+  "file": "internal/httpapi/handlers.go",
+  "find": "gs, err := s.Engine.Timeline(parseQuery(r))",
+  "replace": "gs, err := s.Engine.Timeline(search.Query{Limit: 1})",
+  "why": "时间线只回一条"
+ },
+ {
+  "test": "TestMCPEndpoint",
+  "pkg": "./test/e2e/",
+  "file": "internal/mcpserver/server.go",
+  "find": "Name: \"search_sessions\",",
+  "replace": "Name: \"search_sessions_x\",",
+  "why": "MCP 工具改名 —— agent 侧调用会直接失败"
+ },
+ {
+  "test": "TestSourceFilesUntouched",
+  "pkg": "./test/e2e/",
+  "file": "internal/parser/claude.go",
+  "find": "\tf, err := os.Open(path) // 只读",
+  "replace": "\tos.WriteFile(path, []byte(\"mutated\"), 0644)\n\tf, err := os.Open(path) // 只读",
+  "why": "解析时写了源文件 —— 破坏只读铁律"
+ },
+ {
+  "test": "TestIndexPermissions",
+  "pkg": "./test/e2e/",
+  "file": "internal/index/store.go",
+  "find": "filePerm os.FileMode = 0o600",
+  "replace": "filePerm os.FileMode = 0o644",
+  "why": "索引库权限放宽 —— 里面是集中的凭证副本"
+ },
+ {
+  "test": "TestStaticAssetsAreEmbedded",
+  "pkg": "./internal/dashboard/",
+  "file": "internal/dashboard/static/views/settings.js",
+  "find": "(() => {",
+  "replace": "(() => { /* mutated */",
+  "why": "哨兵：改了静态资源，嵌入检查应当仍然通过（这条不该咬）",
+  "expect": "no-bite"
+ },
+ {
+  "test": "TestThemesDefineSameTokens",
+  "pkg": "./internal/dashboard/",
+  "file": "internal/dashboard/static/theme.css",
+  "find": "  --hit-fg: #6b4607;",
+  "replace": "",
+  "why": "某套主题少定义一个 token —— 那套主题下该处会取到继承值"
+ },
+ {
+  "test": "TestANSIColorsAreLegible",
+  "pkg": "./internal/dashboard/",
+  "file": "internal/dashboard/static/theme.css",
+  "find": "  --ansi-green:",
+  "replace": "  --ansi-green: #fafafa; --ansi-green-unused:",
+  "why": "ANSI 绿改成几乎白 —— 亮色主题下看不见"
+ },
+ {
+  "test": "TestThemeContrastMeetsWCAG_AA",
+  "pkg": "./internal/dashboard/",
+  "file": "internal/dashboard/static/theme.css",
+  "find": "  --fg-dim: #5f5e58;",
+  "replace": "  --fg-dim: #f0f0f0;",
+  "why": "次要文字对比度崩掉"
+ },
+ {
+  "test": "TestThemeHasNoExternalResources",
+  "pkg": "./internal/dashboard/",
+  "file": "internal/dashboard/static/theme.css",
+  "find": ":root {",
+  "replace": "@import url(https://fonts.example.com/x.css);\n:root {",
+  "why": "主题引入外部字体 —— 离线不可用"
+ },
+ {
+  "test": "TestLayoutUsesTokensOnly",
+  "pkg": "./internal/dashboard/",
+  "file": "internal/dashboard/static/layout.css",
+  "find": ".dead-link {",
+  "replace": ".dead-link { background: #123456;",
+  "why": "布局里写死颜色 —— 绕开 token 体系"
+ },
+ {
+  "test": "TestConfigReadsAreGated",
+  "pkg": "./test/e2e/",
+  "file": "internal/dashboard/static/boot.js",
+  "find": "(CD.cfgReady || Promise.resolve()).then(() => { if (CD.mermaidAuto) btn.click(); });",
+  "replace": "if (CD.mermaidAuto) btn.click();",
+  "why": "同步读异步配置 —— 输了竞速就静默不生效"
+ },
+ {
+  "test": "TestSizeGuardIsThreeState",
+  "pkg": "./internal/index/",
+  "file": "internal/index/scanner.go",
+  "find": "\tif err != nil {\n\t\treturn false, true\n\t}\n\treturn bytes >= max, false",
+  "replace": "\treturn err == nil && bytes >= max, false",
+  "why": "体积上限压回两态 —— Stats() 出错等同于「没超限」，守卫静默关闭"
+ },
+ {
+  "test": "TestStatsSummaryIsNullable",
+  "pkg": "./internal/httpapi/",
+  "file": "internal/httpapi/handlers.go",
+  "find": "\t\tout.Summary = &p",
+  "replace": "\t\t_ = p",
+  "why": "摘要进度永远为 null —— 「可空」不能变成掩盖问题的借口"
+ },
+ {
+  "test": "TestResultHighlightNeverAutoDetects",
+  "pkg": "./test/e2e/",
+  "file": "internal/dashboard/static/boot.js",
+  "find": "    const h = READ_HEAD.exec(seg);\n    if (!h) continue;",
+  "replace": "    const h = true;\n    if (!h) continue;",
+  "why": "语言判定不再逐段 —— git diff x.go | head 会被判成源码"
+ },
+ {
+  "test": "TestSummaryPipelineInvariants",
+  "pkg": "./test/e2e/",
+  "file": "internal/index/summarystore.go",
+  "find": "AND q.state IN ('pending','running','failed'))",
+  "replace": "AND q.state IN ('pending','running'))",
+  "why": "入队复活 failed —— 一条失败会话饿死整个队列，且 failed 计数恒为 0"
+ },
+ {
+  "test": "TestSummaryPipelineInvariants",
+  "pkg": "./test/e2e/",
+  "file": "internal/summary/worker.go",
+  "find": "NumPredict: 256, NumCtx: set.NumCtx, NoThink: true,",
+  "replace": "NumPredict: 256,",
+  "why": "摘要请求不设 num_ctx 也不关 thinking —— 截断 + 空回答"
+ },
+ {
+  "test": "TestFailedTasksAreNotResurrected",
+  "pkg": "./internal/index/",
+  "file": "internal/index/summarystore.go",
+  "find": "AND q.state IN ('pending','running','failed'))",
+  "replace": "AND q.state IN ('pending','running'))",
+  "why": "单测层面：failed 被复活"
+ },
+ {
+  "test": "TestInWindow",
+  "pkg": "./internal/summary/",
+  "file": "internal/summary/window.go",
+  "find": "\t\tin = cur >= start || cur < end // 跨零点",
+  "replace": "\t\tin = cur >= start && cur < end // 跨零点",
+  "why": "跨零点写成普通闭区间 —— 22:00-06:00 永远不在窗口内"
+ },
+ {
+  "test": "TestSummaryBudgetIsDerivedNotHardcoded",
+  "pkg": "./test/e2e/",
+  "file": "internal/summary/prompt.go",
+  "find": "\trunes := int(float64(numCtx-ctxReserve) / tokensPerRune)",
+  "replace": "\trunes := 24000",
+  "why": "预算写死回 24000 —— 与 num_ctx 再次脱节"
+ },
+ {
+  "test": "TestSplitCoversEveryPartOfLongText",
+  "pkg": "./internal/summary/",
+  "file": "internal/summary/prompt.go",
+  "find": "\t\tout = append(out, sampleGroup(all[lo:hi], b.Chunk))",
+  "replace": "\t\tout = append(out, Chunk{Text: all[lo]})",
+  "why": "组内只取首段 —— 覆盖退化"
+ },
+ {
+  "test": "TestBothLLMPathsShareOptionBuilder",
+  "pkg": "./test/e2e/",
+  "file": "internal/llm/ollama.go",
+  "find": "\treq.Options = buildOptions(r.NumCtx, 0, r.Model, est)\n",
+  "replace": "",
+  "why": "Chat 不再装配 options —— 回到被截在 2051 token 的状态"
+ },
+ {
+  "test": "TestChatPassesNumCtx",
+  "pkg": "./internal/chat/",
+  "file": "internal/chat/agent.go",
+  "find": "Model: model, Messages: msgs, Tools: tools, NumCtx: a.numCtx()})",
+  "replace": "Model: model, Messages: msgs, Tools: tools})",
+  "why": "问答调用处不传 num_ctx"
+ },
+ {
+  "test": "TestChatScopeIsEnforcedNotSuggested",
+  "pkg": "./test/e2e/",
+  "file": "internal/chat/agent.go",
+  "find": "\t\t\targs := applyScope(tc.Name, tc.Args, scope)\n",
+  "replace": "\t\t\targs := tc.Args\n",
+  "why": "事件流发模型给的参数 —— 展示一个没真正执行过的检索条件"
+ },
+ {
+  "test": "TestReadySignalsPrecedeViewMount",
+  "pkg": "./test/e2e/",
+  "file": "internal/dashboard/static/boot.js",
+  "find": "  CD.projectsReady = loadProjects();\n  CD.cfgReady = loadThemePick();\n\n  CD.renderSide();",
+  "replace": "  CD.renderSide();",
+  "why": "就绪信号挪到挂载之后 —— 门控形同虚设"
+ },
+ {
+  "test": "TestScopeOverridesModelChoice",
+  "pkg": "./internal/chat/",
+  "file": "internal/chat/tools.go",
+  "find": "\tif name == \"search_sessions\" && scope.Project != \"\" {\n\t\tout[\"project\"] = scope.Project\n\t}\n",
+  "replace": "",
+  "why": "范围不再强制覆盖 —— 退回「只写提示词指望模型自觉」"
+ },
+ {
+  "test": "TestScopeDoesNotBlockGetSession",
+  "pkg": "./internal/chat/",
+  "file": "internal/chat/tools.go",
+  "find": "if name == \"search_sessions\" && scope.Project != \"\"",
+  "replace": "if scope.Project != \"\"",
+  "why": "范围也注入 get_session —— 按 id 读取被挡住"
+ },
+ {
+  "test": "TestLostIsCountedAndIsASubsetOfMissing",
+  "pkg": "./internal/backup/",
+  "file": "internal/backup/coverage.go",
+  "find": "\tif !s.Alive {\n\t\tc.LostTotal++\n\t}",
+  "replace": "\tc.LostTotal++",
+  "why": "「源还在但没备」也算成永久丢失 —— 把「去勾上就好」误报成「救不回来了」"
+ },
+ {
+  "test": "TestLostIsCountedAndIsASubsetOfMissing",
+  "pkg": "./internal/backup/",
+  "file": "internal/backup/coverage.go",
+  "find": "\tc.MissingTotal++\n\tif !s.Alive {\n\t\tc.LostTotal++\n\t}",
+  "replace": "\tif !s.Alive {\n\t\tc.LostTotal++\n\t} else {\n\t\tc.MissingTotal++\n\t}",
+  "why": "lost 变成第四类而不是 missing 的子集 —— 三类相加不再等于总数"
+ },
+ {
+  "test": "TestCoverageThreeWaySplit",
+  "pkg": "./internal/backup/",
+  "file": "internal/backup/coverage.go",
+  "find": "\t\tcase !s.Alive:\n\t\t\t// 源没了但备份里有——这一类是本功能的价值证明\n\t\t\tcov.RescuedTotal++",
+  "replace": "\t\tcase false:\n\t\t\tcov.RescuedTotal++",
+  "why": "三分类塌成两分类 —— 「源已消失但备份里有」被混进已覆盖，看不见了"
+ },
+ {
+  "test": "TestCoverageTotalIsNotPageSize",
+  "pkg": "./internal/backup/",
+  "file": "internal/backup/coverage.go",
+  "find": "\tc.MissingTotal++\n\tif !s.Alive {",
+  "replace": "\tc.MissingTotal = len(c.Missing)\n\tif !s.Alive {",
+  "why": "拿返回条数当总数 —— 超过 limit 后总数永远停在 50（R8 的 Children 栽过同一处）"
+ },
+ {
+  "test": "TestFetchReturnsLatestVersionByteForByte",
+  "pkg": "./internal/backup/",
+  "file": "internal/backup/fetch.go",
+  "find": "\t\tif candidates[s.ID] && s.Time.After(best.Time) {",
+  "replace": "\t\tif candidates[s.ID] && best.ID == \"\" {",
+  "why": "取第一个而不是时间最新的快照 —— 拿回更早的、不完整的版本，且看起来完全正常"
+ },
+ {
+  "test": "TestArchivedSaysSoWhenNotInBackup",
+  "pkg": "./internal/httpapi/",
+  "file": "internal/httpapi/archived.go",
+  "find": "\t\t\twriteErr(w, http.StatusNotFound, \"备份里也没有这个会话",
+  "replace": "\t\t\twriteErr(w, http.StatusInternalServerError, \"备份里也没有这个会话",
+  "why": "「备份里没有」与「restic 挂了」不再区分 —— 用户会去找一个不存在的问题"
+ },
+ {
+  "test": "TestArchivedReturnsOriginalNotTheTruncatedIndexCopy",
+  "pkg": "./internal/httpapi/",
+  "file": "internal/httpapi/archived.go",
+  "find": "\tview.Total, view.FromSeq, view.Messages = total, from, msgs",
+  "replace": "\tview.Total, view.FromSeq = total, from",
+  "why": "下发的还是索引里那份截断副本 —— 从备份读等于白读"
+ },
+ {
+  "test": "TestEveryBackupSettingIsActuallyRead",
+  "pkg": "./test/e2e/",
+  "file": "cmd/chatdex/serve.go",
+  "find": "if bk != nil && c.Backup.AfterScan && time.Since(lastBackup) >= autoBackupGap {",
+  "replace": "if bk != nil && false && time.Since(lastBackup) >= autoBackupGap {",
+  "why": "after_scan 变回死开关 —— 设置页勾了没反应，界面上完全看不出来"
+ },
+ {
+  "test": "TestBackupStructuralInvariants",
+  "pkg": "./test/e2e/",
+  "file": "internal/backup/runner.go",
+  "find": "\"RESTIC_PASSWORD_FILE=\"+c.PasswordFile",
+  "replace": "\"RESTIC_PASSWORD=\"+c.PasswordFile",
+  "why": "改用 RESTIC_PASSWORD —— 密码进 /proc/<pid>/environ，同用户可读"
+ },
+ {
+  "test": "TestBackupStructuralInvariants",
+  "pkg": "./test/e2e/",
+  "file": "internal/backup/runner.go",
+  "find": "args := append([]string{\"backup\", \"--json\"}, srcs...)",
+  "replace": "args := append([]string{\"backup\"}, srcs...)",
+  "why": "备份不带 --json —— parseSummary 拿到的是人类可读进度条，永远解析不出结果"
+ },
+ {
+  "test": "TestAutoBackupFailureIsVisibleInStatus",
+  "pkg": "./internal/httpapi/",
+  "file": "internal/httpapi/backup.go",
+  "find": "\t}{st, s.Backup.LastAuto()})",
+  "replace": "\t}{st, nil})",
+  "why": "自动备份的失败原因不下发 —— 每半小时失败一次也只有 journalctl 里看得见（需求 5.3 禁止只记日志）"
+ },
+ {
+  "test": "TestPromptCarriesNoBorrowableNouns",
+  "pkg": "./internal/summary/",
+  "file": "internal/summary/prompt.go",
+  "find": "- 把具体的产品名/命令名换成它所属的品类词，让搜品类也能命中\n- 摘要里只能出现这段会话里真实存在的事物，不要写入本提示词中的任何词语",
+  "replace": "- 用概念词而非原文措辞（例如原文说「类似 TimeMachine 的管理工具」，应写成「增量备份工具」）",
+  "why": "提示词里又出现可直接抄用的示范词 —— 小模型会把它写进毫不相关的摘要（7b 上泄漏率 9%）"
+ },
+ {
+  "test": "TestPromptCarriesNoBorrowableNouns",
+  "pkg": "./internal/summary/",
+  "file": "internal/summary/prompt.go",
+  "find": "以下是一段 AI 编码助手会话的节选。把「在哪个项目里做了什么、结论是什么」\n揉进**一句**中文话里。",
+  "replace": "以下是一段 AI 编码助手会话的节选。用一句中文概括：做了什么 / 涉及哪个项目 / 结论是什么。",
+  "why": "要求写回斜杠枚举 —— 模型把它当输出格式照抄，产出「做了压测/项目 … 结论 …」"
+ },
+ {
+  "test": "TestPromptCarriesNoBorrowableNouns",
+  "pkg": "./internal/summary/",
+  "file": "internal/summary/prompt.go",
+  "find": "- 不要照抄会话里的原话，尤其不要把助手最后那段回复当成摘要\n- 把具体的产品名/命令名换成它所属的品类词，让搜品类也能命中\n- 摘要里只能出现这段会话里真实存在的事物，不要写入本提示词中的任何词语\n- 只输出这一句话本身\n\n会话节选：",
+  "replace": "- 把具体的产品名/命令名换成它所属的品类词，让搜品类也能命中\n- 摘要里只能出现这段会话里真实存在的事物，不要写入本提示词中的任何词语\n- 只输出这一句话本身\n\n会话节选：",
+  "why": "不再禁止抄原话 —— 模型会把助手最后一段回复当摘要（实测 41/3157，且被砍成半句）"
+ }
+]

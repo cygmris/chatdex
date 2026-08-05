@@ -30,9 +30,15 @@ func TestStaticAssetsAreEmbedded(t *testing.T) {
 		// vendored 第三方库：随二进制打包，不从 CDN 加载（需求 3.6）
 		{"/vendor/marked.min.js", "marked"},
 		{"/vendor/purify.min.js", "DOMPurify"},
+		{"/vendor/hljs/highlight.min.js", "hljs"},
+		{"/vendor/hljs/github.css", "hljs"},
+		// mermaid 随包分发但**不在页面上加载**（3.5 MB，见 TestMermaidNotLoadedUpfront）
+		{"/vendor/mermaid.min.js", "mermaid"},
 		// 许可文件也要在，否则分发时就少了归属声明（需求 3.7）
 		{"/vendor/LICENSE-marked.txt", "MIT"},
 		{"/vendor/LICENSE-dompurify.txt", "Apache License"},
+		{"/vendor/LICENSE-highlightjs.txt", "BSD"},
+		{"/vendor/LICENSE-mermaid.txt", "MIT"},
 	} {
 		resp, err := http.Get(srv.URL + c.path)
 		if err != nil {

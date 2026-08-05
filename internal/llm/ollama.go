@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 )
@@ -48,6 +49,10 @@ type ollamaGenerateReq struct {
 	System  string         `json:"system,omitempty"`
 	Stream  bool           `json:"stream"`
 	Options map[string]any `json:"options,omitempty"`
+	// Think 是指针：nil 表示不带这个字段（保持模型默认），false 表示显式关掉。
+	// 用值类型的话，零值 false 会给所有模型都塞上 think:false，
+	// 而老版本 Ollama 不认识这个字段。
+	Think *bool `json:"think,omitempty"`
 }
 
 type ollamaGenerateResp struct {
@@ -57,8 +62,11 @@ type ollamaGenerateResp struct {
 
 func (o *Ollama) Generate(ctx context.Context, r GenerateRequest) (string, error) {
 	body := ollamaGenerateReq{Model: r.Model, Prompt: r.Prompt, System: r.System, Stream: false}
-	if r.NumPredict > 0 {
-		body.Options = map[string]any{"num_predict": r.NumPredict}
+	body.Options = buildOptions(r.NumCtx, r.NumPredict, r.Model,
+		len([]rune(r.System))+len([]rune(r.Prompt)))
+	if r.NoThink {
+		no := false
+		body.Think = &no
 	}
 	var out ollamaGenerateResp
 	if err := o.post(ctx, "/api/generate", body, &out); err != nil {
@@ -75,6 +83,7 @@ type ollamaChatReq struct {
 	Messages []ollamaChatMsg  `json:"messages"`
 	Tools    []ollamaToolSpec `json:"tools,omitempty"`
 	Stream   bool             `json:"stream"`
+	Options  map[string]any   `json:"options,omitempty"`
 }
 
 type ollamaChatMsg struct {
@@ -105,9 +114,14 @@ type ollamaChatResp struct {
 	Error   string        `json:"error"`
 }
 
-func (o *Ollama) Chat(ctx context.Context, model string, msgs []Message, tools []ToolDef) (ChatResponse, error) {
-	req := ollamaChatReq{Model: model, Stream: false}
-	for _, m := range msgs {
+func (o *Ollama) Chat(ctx context.Context, r ChatRequest) (ChatResponse, error) {
+	req := ollamaChatReq{Model: r.Model, Stream: false}
+	est := 0
+	for _, m := range r.Messages {
+		est += len([]rune(m.Content))
+	}
+	req.Options = buildOptions(r.NumCtx, 0, r.Model, est)
+	for _, m := range r.Messages {
 		om := ollamaChatMsg{Role: m.Role, Content: m.Content, ToolName: m.ToolName}
 		for _, tc := range m.ToolCalls {
 			var otc ollamaToolCall
@@ -117,7 +131,7 @@ func (o *Ollama) Chat(ctx context.Context, model string, msgs []Message, tools [
 		}
 		req.Messages = append(req.Messages, om)
 	}
-	for _, t := range tools {
+	for _, t := range r.Tools {
 		var ot ollamaToolSpec
 		ot.Type = "function"
 		ot.Function.Name = t.Name
@@ -200,4 +214,31 @@ func (o *Ollama) Models(ctx context.Context) ([]ModelInfo, error) {
 		}
 	}
 	return usable, nil
+}
+
+// buildOptions 装配 Ollama 的 options。**两条路径共用这一处。**
+//
+// R11 只给 Generate 加了 num_ctx，Chat 是另一个函数、另一个端点，
+// 没有任何东西提示它也需要——于是同一个坑隔一天就在问答链路上重演了一次
+// （实测被截在 2051 token）。抽成一处之后，「加一个请求参数」只有一个地方可改。
+//
+// 返回 nil 表示不带 options 字段（保持服务端原样）。
+func buildOptions(numCtx, numPredict int, model string, estTokens int) map[string]any {
+	opts := map[string]any{}
+	if numPredict > 0 {
+		opts["num_predict"] = numPredict
+	}
+	if numCtx > 0 {
+		opts["num_ctx"] = numCtx
+		// 粗估：中文一字约一 token，是上界估计。超了只告警不拦截——
+		// 估算本来就不准，不该因为估算把能跑的请求挡回去。
+		if estTokens > numCtx {
+			slog.Warn("prompt 可能超出上下文窗口，服务端会静默截断",
+				"估算token", estTokens, "num_ctx", numCtx, "model", model)
+		}
+	}
+	if len(opts) == 0 {
+		return nil
+	}
+	return opts
 }

@@ -286,6 +286,12 @@ mark {
   word-break: break-all;
 }
 .err-inline { color: var(--danger); }
+.ok-inline { color: var(--accent); }
+
+/* 回读页顶部的「从备份读原件」条 */
+.arch-bar { margin-top: .4rem; display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+.arch-bar .restore { flex: 1 1 100%; font-size: .82em; opacity: .75; }
+.arch-bar .restore code { user-select: all; word-break: break-all; }
 
 .msg {
   border-left: 2px solid var(--line);
@@ -403,11 +409,27 @@ mark {
   margin-top: 4px;
 }
 
-/* 代码轻量着色。颜色全部复用既有 token——注释用 fg-faint（本就是"次要"语义），
- * 字符串/数字借 ANSI 的绿与青，四套主题的对比度已由 TestANSIColorsAreLegible 覆盖。 */
-.t-com { color: var(--fg-faint); font-style: italic; }
-.t-str { color: var(--ansi-green); }
-.t-num { color: var(--ansi-cyan); }
+/* 高亮「跟随主题」配色：把 hljs 的类映射到既有 token。
+ * 这是默认选项——四套界面主题的对比度已被 TestANSIColorsAreLegible 覆盖，
+ * 用它们生成的高亮天然与界面一致。官方配色作为可选项由 data-hl 切换。 */
+:root:not([data-hl]) .hljs-comment,
+:root:not([data-hl]) .hljs-quote { color: var(--fg-faint); font-style: italic; }
+:root:not([data-hl]) .hljs-string,
+:root:not([data-hl]) .hljs-meta-string { color: var(--ansi-green); }
+:root:not([data-hl]) .hljs-number,
+:root:not([data-hl]) .hljs-literal { color: var(--ansi-cyan); }
+:root:not([data-hl]) .hljs-keyword,
+:root:not([data-hl]) .hljs-selector-tag,
+:root:not([data-hl]) .hljs-built_in { color: var(--ansi-magenta); }
+:root:not([data-hl]) .hljs-title,
+:root:not([data-hl]) .hljs-section,
+:root:not([data-hl]) .hljs-name { color: var(--ansi-blue); }
+:root:not([data-hl]) .hljs-attr,
+:root:not([data-hl]) .hljs-attribute,
+:root:not([data-hl]) .hljs-variable { color: var(--ansi-yellow); }
+:root:not([data-hl]) .hljs-meta { color: var(--fg-dim); }
+:root:not([data-hl]) .hljs-deletion { color: var(--ansi-red); }
+:root:not([data-hl]) .hljs-addition { color: var(--ansi-green); }
 
 /* ---------------- 工具调用 ---------------- */
 
@@ -672,3 +694,109 @@ mark {
 .set-bad { color: var(--danger); }
 .set-row.bad .set-input input, .set-row.bad .set-input select { border-color: var(--danger); }
 .set-actions { display: flex; gap: 10px; align-items: center; margin-top: 16px; }
+
+/* mermaid 块：源码与图切换，按钮不抢视觉 */
+.mmd { margin: .6rem 0; }
+.mmd-bar { display: flex; justify-content: flex-end; margin-bottom: .3rem; }
+.mmd-btn {
+  font: inherit; font-size: .78rem; padding: .15rem .5rem;
+  color: var(--fg-dim); background: var(--panel);
+  border: 1px solid var(--line); border-radius: 4px; cursor: pointer;
+}
+.mmd-btn:hover:not(:disabled) { color: var(--fg); border-color: var(--fg-dim); }
+.mmd-btn:disabled { opacity: .6; cursor: default; }
+.mmd-out { overflow-x: auto; text-align: center; }
+.mmd-out svg { max-width: 100%; height: auto; }
+.mmd-src { margin: 0; }
+
+/* 语料里的代码大多用 tab 缩进，按默认 8 格展开会把代码挤到右边 */
+pre, code { tab-size: 4; }
+
+/* 子代理标记：与来源标记同一形状，只把边框换成强调色。
+ * 它出现在近半数条目上，做成实心色块会把列表搅得很花。 */
+.badge.sub { border-color: var(--accent); color: var(--accent); }
+
+/* 父子入口。放在元信息块末尾，不抢会话本身的视觉。 */
+.rel-up { margin-top: 4px; font-size: 12px; }
+.rel-up a { color: var(--accent); }
+.rel-down { margin-top: 4px; }
+.kid-list { margin-top: 4px; max-height: 260px; overflow-y: auto; }
+.kid { display: flex; gap: 8px; align-items: baseline; padding: 2px 0; font-size: 12px; }
+.kid a { color: var(--accent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kid .sm { flex: none; font-size: 11px; }
+
+/* 协议不可点的地址：保留文字与下划线提示它本来是个链接，但明确不是可点态 */
+.dead-link {
+  color: var(--fg-dim);
+  text-decoration: underline dotted;
+  cursor: not-allowed;
+}
+
+/* 带行号的源码输出。行号用 ::before 画——它不在 DOM 文本里，
+ * 所以整段选中复制出来就是能直接用的源码（与命令块的 $ 提示符同一手法）。 */
+.tr-code { padding-left: 0; }
+.tr-code .ln { display: block; padding-left: 4.5em; position: relative; }
+.tr-code .ln::before {
+  content: attr(data-n);
+  position: absolute;
+  left: 0;
+  width: 3.5em;
+  text-align: right;
+  color: var(--fg-faint);
+  user-select: none;
+}
+
+/* 摘要生成进度页 */
+.pg-wrap { max-width: 760px; padding: 4px 2px; }
+.pg-bar { height: 8px; border-radius: 4px; background: var(--panel); overflow: hidden; }
+.pg-fill { height: 100%; background: var(--accent); transition: width .3s; }
+.pg-nums { display: flex; gap: 22px; margin: 14px 0 10px; }
+.pg-n { display: flex; flex-direction: column; }
+.pg-n b { font-size: 20px; font-variant-numeric: tabular-nums; }
+.pg-n span { font-size: 11px; color: var(--fg-dim); }
+.pg-n.bad b { color: var(--danger); }
+.pg-meta { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--fg-dim); }
+.pg-meta .bad { color: var(--danger); }
+.pg-fail { margin-top: 18px; border-top: 1px solid var(--line); padding-top: 10px; }
+.pg-fail-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.pg-f { display: flex; align-items: baseline; gap: 10px; padding: 3px 0; font-size: 12px; }
+.pg-f a { color: var(--accent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40%; }
+.pg-f .sm { font-size: 11px; }
+
+/* 问一问的范围选择与每轮的范围标注 */
+.chat-form #chat-scope { flex: none; max-width: 180px; }
+.turn .scope { font-size: 11px; color: var(--fg-dim); margin: 2px 0 4px; }
+
+/* 备份源列表编辑器 */
+.src-list { display: flex; flex-direction: column; gap: 4px; }
+.src-row { display: flex; align-items: center; gap: 6px; }
+.src-row input[type=text] { flex: 1; min-width: 0; }
+.src-add { align-self: flex-start; }
+
+/* 备份页。沿用 .pg-* 的排版尺度（760px 栏宽、tabular-nums 数字） */
+.bk-wrap { max-width: 760px; padding: 4px 2px; display: flex; flex-direction: column; gap: 18px; }
+.bk-card { border: 1px solid var(--line); border-radius: 6px; padding: 12px 14px; }
+.bk-card h2 { font-size: 13px; margin: 0 0 8px; display: flex; align-items: center; gap: 8px; }
+.bk-card p { margin: 8px 0; }
+.bk-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--danger); }
+.bk-dot.on { background: var(--accent); }
+.bk-kv { display: grid; grid-template-columns: max-content 1fr; gap: 3px 14px; margin: 0; font-size: 12.5px; }
+.bk-kv dt { color: var(--fg-dim); }
+.bk-kv dd { margin: 0; overflow-wrap: anywhere; }
+.bk-kv .bad { color: var(--danger); }
+.bk-last { margin-top: 10px; font-size: 12.5px; border-left: 3px solid var(--accent); padding-left: 10px; }
+.bk-last.warn { border-left-color: var(--danger); }
+.bk-cov { display: flex; flex-wrap: wrap; gap: 22px; margin: 12px 0 6px; }
+.bk-num { display: flex; flex-direction: column; }
+.bk-num .n { font-size: 20px; font-variant-numeric: tabular-nums; }
+.bk-num .t { font-size: 11px; color: var(--fg-dim); }
+.bk-num.ok .n { color: var(--accent); }
+.bk-num.bad .n, .bk-num.warn .n { color: var(--danger); }
+.bk-list { font-size: 11.5px; margin-top: 8px; }
+.bk-list summary { cursor: pointer; color: var(--fg-dim); }
+.bk-list ul { margin: 6px 0 0; padding-left: 18px; max-height: 240px; overflow-y: auto; }
+.bk-list li { overflow-wrap: anywhere; padding: 1px 0; }
+.bk-snaps { width: 100%; font-size: 12px; border-collapse: collapse; display: block; overflow-x: auto; }
+.bk-snaps td { padding: 3px 10px 3px 0; white-space: nowrap; }
+.bk-warn ul { margin: 6px 0 0; padding-left: 18px; font-size: 12.5px; }
+.bk-warn li { padding: 3px 0; }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 
 	"github.com/cygmris/chatdex/internal/llm"
@@ -53,7 +54,7 @@ func Validate(c Config) []FieldError {
 				}
 			}
 		case "string":
-			if s, _ := v.(string); strings.TrimSpace(s) == "" {
+			if s, _ := v.(string); !f.Optional && strings.TrimSpace(s) == "" {
 				add(f.Key, "不能为空")
 			}
 		}
@@ -144,7 +145,11 @@ func diffFromDefault(c Config) map[string]any {
 
 	for _, f := range Fields() {
 		cur, base := c.Get(f.Key), def.Get(f.Key)
-		if cur != base {
+		// 必须用 DeepEqual 而不是 !=：Get 返回 any，而 `!=` 在接口装着
+		// **不可比较类型**（切片、map）时会直接 panic —— 不是返回 false，是崩。
+		// 在 backup.sources（[]BackupSource）加进来之前，所有配置值恰好都是
+		// 标量，于是这个假设一直没被戳破。
+		if !reflect.DeepEqual(cur, base) {
 			put(f.Key, cur)
 		}
 	}

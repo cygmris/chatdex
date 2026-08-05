@@ -38,7 +38,7 @@ func (f *fakeLLM) Generate(_ context.Context, _ llm.GenerateRequest) (string, er
 	}
 	return f.reply, nil
 }
-func (f *fakeLLM) Chat(context.Context, string, []llm.Message, []llm.ToolDef) (llm.ChatResponse, error) {
+func (f *fakeLLM) Chat(context.Context, llm.ChatRequest) (llm.ChatResponse, error) {
 	return llm.ChatResponse{}, nil
 }
 
@@ -52,7 +52,7 @@ func newEnv(t *testing.T, reply string) (*index.Store, *summary.Worker, *fakeLLM
 	f := newFakeLLM(reply)
 	w := &summary.Worker{
 		Store: st, Engine: search.NewEngine(st.DB()), LLM: f,
-		Live: func() (string, int, bool) { return "test-model", 0, true },
+		Live: func() summary.Settings { return summary.Settings{Model: "test-model", Enabled: true, NumCtx: 8192} },
 	}
 	return st, w, f
 }
@@ -452,7 +452,7 @@ func TestEnqueueMissingSkipsEmptySessions(t *testing.T) {
 func TestWorkerReadsModelLive(t *testing.T) {
 	st, w, f := newEnv(t, "一句摘要")
 	model := "model-a"
-	w.Live = func() (string, int, bool) { return model, 0, true }
+	w.Live = func() summary.Settings { return summary.Settings{Model: model, Enabled: true, NumCtx: 8192} }
 	id := seed(t, st, "hot", 2)
 
 	text, n, err := w.Summarize(context.Background(), id)

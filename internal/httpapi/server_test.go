@@ -126,3 +126,31 @@ func TestStatsAndProjectsEndpoints(t *testing.T) {
 		t.Errorf("Projects = %+v", ps)
 	}
 }
+
+// 摘要进度取不到时必须下发 null，不能下发零值。
+//
+// 零值会被前端算成 done=0/total=0 → pending=0 → 进度条直接隐藏，
+// 看起来像「摘要都跑完了」。这类错误没有任何其它信号：接口 200、
+// 字段齐全、日志干净，只有结论是反的。
+//
+// 这里断言的是**契约**（字段可空、正常时非空），失败注入在前端那侧验。
+func TestStatsSummaryIsNullable(t *testing.T) {
+	srv, _ := newServer(t)
+
+	var raw map[string]any
+	if code := getJSON(t, srv.URL+"/api/stats", &raw); code != 200 {
+		t.Fatalf("状态码 = %d", code)
+	}
+	v, ok := raw["summary"]
+	if !ok {
+		t.Fatal("/api/stats 没有 summary 字段")
+	}
+	// 正常路径下必须是对象而不是 null——否则这个字段永远是 null，
+	// 「可空」就成了掩盖问题的借口
+	if v == nil {
+		t.Error("正常情况下 summary 不该是 null")
+	}
+	if _, isObj := v.(map[string]any); !isObj {
+		t.Errorf("summary 应当是对象，实际 %T", v)
+	}
+}

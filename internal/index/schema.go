@@ -33,6 +33,9 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 CREATE INDEX IF NOT EXISTS sessions_project ON sessions(project_path, started_at);
 CREATE INDEX IF NOT EXISTS sessions_time    ON sessions(started_at);
+-- 给「取某会话的子代理」的等值查询用。三态过滤（parent_uid != ''）**不需要**它：
+-- 那个条件选择率接近 50%，走索引反而更慢，SQLite 会自己选全表扫。
+CREATE INDEX IF NOT EXISTS sessions_parent  ON sessions(parent_uid);
 
 CREATE TABLE IF NOT EXISTS blocks (
     id          INTEGER PRIMARY KEY,

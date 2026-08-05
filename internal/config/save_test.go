@@ -194,3 +194,48 @@ func TestFieldsCoverEveryConfigKey(t *testing.T) {
 		t.Errorf("Config 有 %d 个可配置字段，但元信息只声明了 %d 个——新增配置项时忘了同步 meta.go", n, len(Fields()))
 	}
 }
+
+// 配置里出现切片/map 这类**不可比较**的值时，Save 不得 panic。
+//
+// diffFromDefault 原本用 `cur != base` 比较 any —— 接口里装着切片时
+// 那不是返回 false，是**直接崩**。在 backup.sources（[]BackupSource）加进来
+// 之前所有配置值恰好都是标量，所以这个假设一直没被戳破。
+func TestSaveHandlesNonComparableValues(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	c := Default()
+	// 改动一个切片字段：既要不 panic，也要真的被写进去
+	c.Backup.Sources = []BackupSource{{Path: "/somewhere", Enabled: true}}
+
+	if err := Save(path, c); err != nil {
+		t.Fatalf("Save 不该失败：%v", err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatal(err)
+	}
+	sec, ok := m["backup"].(map[string]any)
+	if !ok {
+		t.Fatalf("改过的切片字段没被写进配置：%s", raw)
+	}
+	if _, ok := sec["sources"]; !ok {
+		t.Errorf("backup.sources 没被写进去：%s", raw)
+	}
+
+	// 反向：没改过就不该写（沿用「只写改过的键」那条纪律）
+	path2 := filepath.Join(t.TempDir(), "c2.json")
+	if err := Save(path2, Default()); err != nil {
+		t.Fatal(err)
+	}
+	raw2, _ := os.ReadFile(path2)
+	var m2 map[string]any
+	json.Unmarshal(raw2, &m2)
+	if sec, ok := m2["backup"].(map[string]any); ok {
+		if _, has := sec["sources"]; has {
+			t.Errorf("默认值不该被写进配置：%s", raw2)
+		}
+	}
+}

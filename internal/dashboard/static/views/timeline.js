@@ -28,7 +28,7 @@
         ${g.sessions.map((s) => `
           <button class="tl" type="button" data-id="${s.id}">
             <span class="badge">${s.source === 'codex' ? 'CODEX' : 'CLAUDE'}</span>
-            ${s.agent_label ? '<span class="badge">子代理</span>' : ''}
+            ${s.is_sub ? '<span class="badge sub">子代理</span>' : ''}
             <span class="tl-time mono">${CD.fmtRange(s.started_at, s.ended_at)}</span>
             <span class="tl-n mono">${s.msg_count} 条</span>
             <span class="tl-label${s.title ? ' named' : s.has_summary ? ' from-summary' : ''}">${CD.esc(s.label || '（无内容）')}</span>

@@ -43,7 +43,7 @@
             !CD.query.q && CD.sessionSubtitle(s) ? `<p class="sub-sum">${CD.esc(CD.sessionSubtitle(s))}</p>` : ''}
           <div class="foot">
             <span class="badge">${s.source === 'codex' ? 'CODEX' : 'CLAUDE'}</span>
-            ${s.agent_label ? '<span class="badge">子代理</span>' : ''}
+            ${s.is_sub ? '<span class="badge sub">子代理</span>' : ''}
             <span class="path">${CD.esc(s.project_path || '（未知项目）')}</span>
             <span>${CD.fmtRange(s.started_at, s.ended_at)}</span>
             <span>${s.msg_count} 条</span>

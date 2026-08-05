@@ -3,6 +3,8 @@ package chat
 import (
 	"context"
 	"fmt"
+	"github.com/cygmris/chatdex/internal/search"
+	"strings"
 
 	"github.com/cygmris/chatdex/internal/llm"
 	"github.com/cygmris/chatdex/internal/mcpserver"
@@ -15,7 +17,40 @@ const (
 	toolBudget = 24000
 )
 
-const systemPrompt = `你是 chatdex 的检索助手，帮用户在他自己的历史会话（Claude Code 与 Codex）里找东西。
+// maxPromptProjects 是塞进系统提示的项目条数上限。
+// 实测本机 9 个项目，20 条足够；不限量的话项目多起来会撑爆上下文。
+const maxPromptProjects = 20
+
+// systemPrompt 按当前范围与项目清单拼装。
+//
+// **项目清单直接塞进提示，不指望模型自己去调 list_projects** ——
+// 那个工具在工具集里躺了两期，实测一次都没被主动调用过。
+// 同时写明当前生效的范围，否则模型会对「怎么搜不到别的项目」感到困惑，
+// 进而在同一个范围里反复改写查询。
+func (a *Agent) systemPrompt(scope Scope) string {
+	var sb strings.Builder
+	sb.WriteString(basePrompt)
+
+	if scope.Project != "" {
+		fmt.Fprintf(&sb, "\n\n**本次检索范围已被限定在项目 %s（含其子目录）**，"+
+			"其它项目的会话搜不到是正常的，不要因此反复改写查询。", scope.Project)
+	}
+
+	if a.Projects != nil {
+		if ps := a.Projects(); len(ps) > 0 {
+			if len(ps) > maxPromptProjects {
+				ps = ps[:maxPromptProjects]
+			}
+			sb.WriteString("\n\n可用的项目（用户说项目名时对应到这里的路径）：")
+			for _, p := range ps {
+				fmt.Fprintf(&sb, "\n- %s（%d 个会话）", p.ProjectPath, p.Sessions)
+			}
+		}
+	}
+	return sb.String()
+}
+
+const basePrompt = `你是 chatdex 的检索助手，帮用户在他自己的历史会话（Claude Code 与 Codex）里找东西。
 
 工作方式：
 - 先用 search_sessions 检索。关键词是**字面匹配**，命中为 0 时**必须换个说法再搜**：
@@ -24,6 +59,14 @@ const systemPrompt = `你是 chatdex 的检索助手，帮用户在他自己的�
 - 回答时必须列出具体的会话：会话 id、项目路径、原始文件绝对路径。
 - 只根据检索到的内容回答，不要编造会话内容。
 - 用中文回答，简洁。`
+
+// Scope 是本次问答的检索范围。
+//
+// 空 Project 表示全部项目——不划范围是更常见的用法，而且划错范围会让 agent
+// 在错误的范围里反复改写查询（重试机制会把这个错误放大）。
+type Scope struct {
+	Project string
+}
 
 // Event 是过程中推给前端的一条事件。
 //
@@ -42,18 +85,35 @@ type Event struct {
 type Agent struct {
 	LLM   llm.Client
 	Tools *mcpserver.Tools
-	// Live 返回当前生效的模型与轮次上限（需求 4.3 的热生效）。
-	Live func() (model string, maxRounds int)
+	// Live 返回当前生效的配置（需求 4.3 的热生效）。
+	//
+	// 返回结构体而不是多返回值：R11 在 summary.Worker.Live 上栽过同一处——
+	// 元组每加一项就要改全部调用点，且都是 string/int，写反了编译器拦不住。
+	Live func() Settings
+	// Projects 返回当前项目清单，用于拼进系统提示。可为 nil（测试）。
+	// 与 Live 一样是回调而不是字段——拷成字段就变成需重启才能刷新的了。
+	Projects func() []search.ProjectStat
 	// Model / MaxRounds 是 Live 未接时的回退（测试用）。
 	Model     string
 	MaxRounds int
 }
 
-func (a *Agent) cfg() (string, int) {
+// Settings 是 agent 每轮重新读取的配置。
+type Settings struct {
+	Model     string
+	MaxRounds int
+	// NumCtx 与摘要共用同一个 llm.num_ctx——实测 8192→32768 在两个模型上
+	// 分别只多 408 / 433 MiB，分开设省不下什么却多一个会再次失配的旋钮。
+	NumCtx int
+}
+
+func (a *Agent) numCtx() int { return a.cfg().NumCtx }
+
+func (a *Agent) cfg() Settings {
 	if a.Live != nil {
 		return a.Live()
 	}
-	return a.Model, a.MaxRounds
+	return Settings{Model: a.Model, MaxRounds: a.MaxRounds}
 }
 
 // Available 探测本地 LLM 此刻是否就绪。
@@ -63,20 +123,22 @@ func (a *Agent) cfg() (string, int) {
 func (a *Agent) Available(ctx context.Context) bool { return a.LLM.Available(ctx) }
 
 // Ask 回答一个问题，过程中的每一步通过 emit 推出去。
-func (a *Agent) Ask(ctx context.Context, question string, emit func(Event)) error {
-	model, rounds := a.cfg()
+func (a *Agent) Ask(ctx context.Context, question string, scope Scope, emit func(Event)) error {
+	set := a.cfg()
+	model, rounds := set.Model, set.MaxRounds
 	if rounds <= 0 {
 		rounds = defaultMaxRounds
 	}
 	msgs := []llm.Message{
-		{Role: "system", Content: systemPrompt},
+		{Role: "system", Content: a.systemPrompt(scope)},
 		{Role: "user", Content: question},
 	}
 	tools := toolDefs()
 	budget := toolBudget
 
 	for round := 1; round <= rounds; round++ {
-		resp, err := a.LLM.Chat(ctx, model, msgs, tools)
+		resp, err := a.LLM.Chat(ctx, llm.ChatRequest{
+			Model: model, Messages: msgs, Tools: tools, NumCtx: a.numCtx()})
 		if err != nil {
 			return err
 		}
@@ -87,9 +149,12 @@ func (a *Agent) Ask(ctx context.Context, question string, emit func(Event)) erro
 
 		msgs = append(msgs, llm.Message{Role: "assistant", Content: resp.Content, ToolCalls: resp.ToolCalls})
 		for _, tc := range resp.ToolCalls {
-			emit(Event{Type: "tool", Tool: tc.Name, Args: tc.Args, Round: round})
+			// 先应用范围再发事件：事件流是给用户看「它到底搜了什么」的，
+			// 发模型给的参数就等于展示了一个**没真正执行过**的检索条件。
+			args := applyScope(tc.Name, tc.Args, scope)
+			emit(Event{Type: "tool", Tool: tc.Name, Args: args, Round: round})
 
-			out, hits, err := a.call(tc.Name, tc.Args)
+			out, hits, err := a.call(tc.Name, args)
 			if err != nil {
 				out = fmt.Sprintf(`{"error":%q}`, err.Error())
 			}
@@ -115,7 +180,8 @@ func (a *Agent) Ask(ctx context.Context, question string, emit func(Event)) erro
 	emit(Event{Type: "note", Text: fmt.Sprintf("已达检索轮次上限（%d 轮），根据已有信息作答。", rounds)})
 	msgs = append(msgs, llm.Message{Role: "user",
 		Content: "已达检索轮次上限。请立刻用已有信息作答，不要再调用工具。"})
-	resp, err := a.LLM.Chat(ctx, model, msgs, nil) // 不给工具，逼它收口
+	resp, err := a.LLM.Chat(ctx, llm.ChatRequest{
+		Model: model, Messages: msgs, NumCtx: a.numCtx()}) // 不给工具，逼它收口
 	if err != nil {
 		return err
 	}
