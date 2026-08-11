@@ -3,6 +3,7 @@ package backup
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 )
@@ -122,11 +123,23 @@ func contains(s, sub string) bool {
 	return false
 }
 
+// findRestic 找一个真的 restic 来跑集成测试。
+//
+// **先走 PATH**，与生产代码一致（Config.bin() 不配路径时就返回 "restic"，
+// 交给 exec 去 PATH 里找）。原先只查两个写死的路径，结果 CI 把 restic 装在
+// /usr/local/bin，这些用例**全被静默跳过**——而 `ok ... 0.004s` 看起来和
+// 真跑过一模一样，CI 绿着却什么都没测。
+//
+// 写死的两条留作兜底：某些环境（systemd --user）的 PATH 未必含 ~/.local/bin。
 func findRestic(t *testing.T) string {
 	t.Helper()
+	if p, err := exec.LookPath("restic"); err == nil {
+		return p
+	}
 	for _, p := range []string{
 		filepath.Join(os.Getenv("HOME"), ".local", "bin", "restic"),
 		"/usr/bin/restic",
+		"/usr/local/bin/restic",
 	} {
 		if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
 			return p

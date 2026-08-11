@@ -55,6 +55,26 @@ jobs:
         # 而 CI 的意义正是「这一次真的跑过」。
         run: go test ./... -count=1
 
+      - name: 确认备份集成测试真的跑了，不是被跳过
+        # 这一步专治「装了 restic 但测试没用上」：findRestic 曾只查两个写死的
+        # 路径，而 CI 装在 /usr/local/bin，于是全部 t.Skip —— 而
+        # `ok ... 0.004s` 与真跑过长得一模一样，CI 绿着却什么都没测。
+        # go test 没有「跳过即失败」的开关，只能自己数。
+        run: |
+          set -euo pipefail
+          out=$(go test ./internal/backup/ -count=1 -v -run 'TestReal|TestCoverage|TestFetch')
+          echo "$out" | grep -E '^(=== RUN|--- (PASS|SKIP|FAIL))' || true
+          if echo "$out" | grep -q '^--- SKIP'; then
+            echo "::error::备份集成测试被跳过了 —— restic 没被 findRestic 找到"
+            exit 1
+          fi
+          n=$(echo "$out" | grep -c '^--- PASS' || true)
+          if [ "$n" -lt 5 ]; then
+            echo "::error::只有 $n 个集成用例通过，少于预期的 5 个"
+            exit 1
+          fi
+          echo "备份集成测试真跑了 $n 个用例"
+
   build:
     name: 构建 ${{ matrix.goos }}/${{ matrix.goarch }}
     runs-on: ubuntu-latest
