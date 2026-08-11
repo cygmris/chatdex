@@ -93,6 +93,12 @@ ollama pull qwen2.5:7b-instruct
 
 提供三个工具：`search_sessions`、`get_session`、`list_projects`。
 
+> ⚠️ **走 HTTP（Streamable HTTP），不是 stdio。** chatdex 是一个常驻服务，
+> MCP 端点挂在已经在跑的那个进程上（`:5022/mcp`）——所以配置里填 `url`，
+> **不要**写成 `{"command": "chatdex", "args": ["serve"]}` 那种 stdio 形式：
+> 那样客户端会一直等 stdio 上的 JSON-RPC，而进程在监听 HTTP，双方谁也等不到谁。
+> 先 `chatdex serve`（或用 systemd 常驻），再让客户端连上面那个 URL。
+
 ## 界面
 
 > 所有截图用的都是**造出来的演示数据**——57 个虚构会话、5 个虚构项目，不是任何人的真实会话。

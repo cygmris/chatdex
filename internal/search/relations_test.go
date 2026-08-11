@@ -15,7 +15,7 @@ func TestChildrenTotalIsNotPageSize(t *testing.T) {
 	seeds := []seed{{uid: "main", project: "/p", blocks: repeatBlocks("assistant", "父", 1)}}
 	for i := 0; i < 60; i++ {
 		seeds = append(seeds, seed{
-			uid: "sub" + string(rune('A'+i%26)) + string(rune('a'+i/26)),
+			uid:     "sub" + string(rune('A'+i%26)) + string(rune('a'+i/26)),
 			project: "/p", parent: "main",
 			blocks: repeatBlocks("assistant", "子", 1),
 		})

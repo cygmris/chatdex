@@ -106,6 +106,13 @@ Let an agent search its own history:
 
 Three tools: `search_sessions`, `get_session`, `list_projects`.
 
+> ⚠️ **Streamable HTTP, not stdio.** chatdex is a long-running service and the MCP
+> endpoint lives on the process that is already running (`:5022/mcp`), so the config
+> takes a `url`. Do **not** write it as `{"command": "chatdex", "args": ["serve"]}` —
+> that stdio form makes the client wait for JSON-RPC on stdin while the process is
+> listening on HTTP, and neither side ever hears from the other.
+> Start `chatdex serve` (or run it under systemd), then point the client at the URL above.
+
 ## Screenshots
 
 > All screenshots use **synthetic demo data** — 57 fabricated sessions across 5 fictional projects.
