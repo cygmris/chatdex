@@ -49,14 +49,24 @@ chatdex 对这四条各有对策，且都有实测数字撑着——见 [`docs/a
 
 ## 快速开始
 
-需要 Go 1.26+。**不需要** Node、构建链、Docker，或任何网络访问。
+单个静态二进制，**不需要** Node、构建链、Docker，或任何网络访问。
+
+从 [Releases](https://github.com/cygmris/chatdex/releases/latest) 下对应平台的包
+（linux / macOS × amd64 / arm64）：
+
+```bash
+tar -xzf chatdex_0.1.0_linux_amd64.tar.gz
+install -m755 chatdex_0.1.0_linux_amd64/chatdex ~/.local/bin/chatdex
+
+chatdex index      # 首次全量索引，3000 会话约 13 分钟
+chatdex serve      # dashboard :5021 / API+MCP :5022
+```
+
+或者自己构建（需 Go 1.26+）：
 
 ```bash
 git clone https://github.com/cygmris/chatdex.git && cd chatdex
 go build -o ~/.local/bin/chatdex ./cmd/chatdex
-
-chatdex index      # 首次全量索引，3000 会话约 13 分钟
-chatdex serve      # dashboard :5021 / API+MCP :5022
 ```
 
 浏览器打开 <http://127.0.0.1:5021>。常驻运行：

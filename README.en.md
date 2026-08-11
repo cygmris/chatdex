@@ -61,14 +61,25 @@ chatdex has a specific answer to each, with measured numbers behind it — see
 
 ## Quick start
 
-Requires Go 1.26+. **No** Node, no build chain, no Docker, no network access.
+A single static binary. **No** Node, no build chain, no Docker, no network access.
+
+Grab the archive for your platform from
+[Releases](https://github.com/cygmris/chatdex/releases/latest)
+(linux / macOS × amd64 / arm64):
+
+```bash
+tar -xzf chatdex_0.1.0_linux_amd64.tar.gz
+install -m755 chatdex_0.1.0_linux_amd64/chatdex ~/.local/bin/chatdex
+
+chatdex index      # first full index — ~13 min for 3 000 sessions
+chatdex serve      # dashboard :5021 / API+MCP :5022
+```
+
+Or build it yourself (needs Go 1.26+):
 
 ```bash
 git clone https://github.com/cygmris/chatdex.git && cd chatdex
 go build -o ~/.local/bin/chatdex ./cmd/chatdex
-
-chatdex index      # first full index — ~13 min for 3 000 sessions
-chatdex serve      # dashboard :5021 / API+MCP :5022
 ```
 
 Open <http://127.0.0.1:5021>. To keep it running:
