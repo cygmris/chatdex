@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # 钉死 restic 版本：备份的集成测试跑的是真二进制。
+  # 不钉的话（比如用 apt 装），跑的就不是我们开发时对着的那个版本——
+  # 而 restic 的 --json 输出形态跨版本会变（0.19 起连错误都吐 JSON，
+  # 且 find/snapshots 两个命令的数组顺序相反），CI 会因此红得莫名其妙。
+  RESTIC_VERSION: 0.19.1
+
+jobs:
+  test:
+    name: 测试
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: 装 restic
+        run: |
+          set -euo pipefail
+          url="https://github.com/restic/restic/releases/download/v${RESTIC_VERSION}/restic_${RESTIC_VERSION}_linux_amd64.bz2"
+          curl -fsSL "$url" | bunzip2 > /usr/local/bin/restic
+          chmod +x /usr/local/bin/restic
+          restic version
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: gofmt 检查
+        run: |
+          # gofmt -l 对未格式化的文件输出文件名，本身不返回非零——
+          # 直接 `gofmt -l ./...` 会永远绿。要显式判空。
+          unformatted=$(gofmt -l $(git ls-files '*.go'))
+          if [ -n "$unformatted" ]; then
+            echo "以下文件没 gofmt 过："
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go test
+        # -count=1 关掉测试缓存：缓存命中时测试根本没跑，
+        # 而 CI 的意义正是「这一次真的跑过」。
+        run: go test ./... -count=1
+
+  build:
+    name: 构建 ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: linux,  goarch: amd64 }
+          - { goos: linux,  goarch: arm64 }
+          - { goos: darwin, goarch: amd64 }
+          - { goos: darwin, goarch: arm64 }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: 交叉编译
+        # CGO_ENABLED=0：SQLite 用的是 modernc.org/sqlite（纯 Go 实现），
+        # 所以四个平台都能在 linux runner 上直接交叉编译，不需要各自的 runner。
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: go build -o /dev/null ./cmd/chatdex

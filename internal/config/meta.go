@@ -19,8 +19,8 @@ type FieldMeta struct {
 	// Optional 表示空串是这个字段的合法取值，而不是漏填。
 	// 默认所有 string 都不许为空——那对绝大多数配置是对的（端点、模型名），
 	// 但「生成时间窗口」空就是「不限」，是它最常见的取值。
-	Optional bool `json:"optional,omitempty"`
-	Group   string   `json:"group"`
+	Optional bool   `json:"optional,omitempty"`
+	Group    string `json:"group"`
 }
 
 // restartHint 是需重启项的统一提示。
