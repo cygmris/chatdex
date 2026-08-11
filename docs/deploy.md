@@ -16,9 +16,26 @@
 
 ## 安装
 
+拿到二进制有两条路，之后的步骤一样。
+
+**下预编译包**（[Releases](https://github.com/cygmris/chatdex/releases/latest)，
+linux / macOS × amd64 / arm64，单个静态二进制，不需要 Go）：
+
+```bash
+tar -xzf chatdex_<版本>_linux_amd64.tar.gz
+install -m755 chatdex_<版本>_linux_amd64/chatdex ~/.local/bin/chatdex
+```
+
+**或自己构建**（需 Go 1.26+）：
+
 ```bash
 cd <仓库目录>
 go build -o ~/.local/bin/chatdex ./cmd/chatdex
+```
+
+然后挂 systemd：
+
+```bash
 cp deploy/systemd/chatdex.service ~/.config/systemd/user/chatdex.service
 systemctl --user daemon-reload
 systemctl --user enable --now chatdex.service
@@ -35,7 +52,13 @@ xdg-open http://127.0.0.1:5021              # dashboard
 ## 升级
 
 ```bash
+# 自己构建的
 go build -o ~/.local/bin/chatdex ./cmd/chatdex && systemctl --user restart chatdex
+
+# 或换成新版预编译包（先停服务，否则 cp 会报 Text file busy）
+systemctl --user stop chatdex
+install -m755 chatdex_<新版本>_linux_amd64/chatdex ~/.local/bin/chatdex
+systemctl --user start chatdex
 ```
 
 重启会复用已有索引，只补停机期间的增量（日志里能看到 `增量索引完成 files=N`，
