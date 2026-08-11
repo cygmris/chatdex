@@ -4,6 +4,8 @@
 
 [简体中文](README.md) | English
 
+[![CI](https://github.com/cygmris/chatdex/actions/workflows/ci.yml/badge.svg)](https://github.com/cygmris/chatdex/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/cygmris/chatdex)](https://github.com/cygmris/chatdex/releases/latest)
 [![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![SQLite FTS5](https://img.shields.io/badge/SQLite-FTS5-003B57?logo=sqlite&logoColor=white)](https://sqlite.org/fts5.html)
