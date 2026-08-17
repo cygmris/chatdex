@@ -14,6 +14,7 @@
   let cov = null;     // /api/backup/coverage，按需拉（要跑 restic ls，秒级）
   let snaps = null;
   let last = null;    // 本次会话里最后一次手动备份的结果
+  let sugg = null;    // /api/backup/suggest，随页面一起拉（只做 os.Stat，实测 0.25 ms）
   let busy = '';
 
   async function load() {
@@ -27,6 +28,8 @@
     if (st.repo_ready) {
       try { snaps = await CD.api('/api/backup/snapshots'); } catch { snaps = null; }
     }
+    // 建议不依赖 restic，就算备份没配好也该告诉你「有哪些东西该备」
+    try { sugg = await CD.api('/api/backup/suggest'); } catch { sugg = null; }
     render();
   }
 
@@ -34,7 +37,9 @@
     if (!root) return;
     root.innerHTML = `<div class="bk-wrap">
       ${statusCard()}
-      ${st.repo_ready ? actionCard() + coverageCard() + snapsCard() : ''}
+      ${st.repo_ready ? actionCard() + coverageCard() : ''}
+      ${suggestCard()}
+      ${st.repo_ready ? snapsCard() : ''}
       ${warnCard()}
     </div>`;
     bind();
@@ -115,12 +120,38 @@
     </section>`;
   }
 
+  /* 覆盖率是拿哪一刻的快照算的 —— 不说清楚，下面那四个数就会骗人。
+   *
+   * 覆盖率永远拿「最新快照」比对，而「最新」可能是一周前：那之后新建的
+   * 会话既不在「已覆盖」也不在「未覆盖」，它们压根不在比对基准里，
+   * 而界面上一片安好。实测撞到过——快照停在 08-10，页面在 08-17
+   * 仍然报「已覆盖 3082」。
+   *
+   * 过期判定（stale）由后端给，前端不自己算：阈值只能有一处（R13）。
+   */
+  function covBasis() {
+    if (!cov.snapshot_time) {
+      return '<p class="hint">还没有任何快照 —— 点上面的「立即备份」跑第一次。</p>';
+    }
+    const when = CD.fmtTime(Math.floor(new Date(cov.snapshot_time).getTime() / 1000));
+    if (!cov.stale) {
+      return `<p class="hint">依据 ${when} 的快照（${CD.esc(cov.stale_for)}）。</p>`;
+    }
+    return `<div class="bk-stale">
+      <strong>这份覆盖率已经过期了</strong> —— 依据的是 ${when} 的快照（${CD.esc(cov.stale_for)}）。
+      <br>下面的数字只说明「截至那一刻」的情况：<strong>那之后新建的会话一条都没备</strong>，
+      而它们既不算「已覆盖」也不算「未覆盖」，因为压根不在比对基准里。
+      <br>去<a href="?view=settings">设置</a>确认「扫描后顺手备一次」是否开着，或点上面的「立即备份」。
+    </div>`;
+  }
+
   function covResult() {
     if (cov.error) return `<p class="err">核对失败：${CD.esc(cov.error)}</p>`;
     // 「没备但源还在」与「没备且源已没」是两件天差地别的事：前者去勾上就好，
     // 后者是永久丢失。只报一个「未覆盖」会把后者说成前者。
     const stillThere = cov.missing_total - cov.lost_total;
-    return `<div class="bk-cov">
+    return `${covBasis()}
+    <div class="bk-cov">
       ${covNum('已覆盖', cov.covered_total, 'ok')}
       ${covNum('没备（源还在）', stillThere, stillThere ? 'warn' : '')}
       ${covNum('永久丢失', cov.lost_total, cov.lost_total ? 'bad' : '')}
@@ -144,6 +175,57 @@
     return `<details class="bk-list"><summary>${label}（列出前 ${items.length} 条）</summary>
       <ul>${items.map((e) => `<li class="mono">${CD.esc(e.path)}${
         e.alive ? '' : ' <span class="muted">· 源已消失</span>'}</li>`).join('')}</ul></details>`;
+  }
+
+  /* 「还该备什么」——覆盖率的另一半。
+   *
+   * 覆盖率回答「我索引过的**会话**备份里有没有」；这里回答
+   * 「我这台机器上 **agent 的东西**备了没有」。restic 只看得见路径，
+   * 它不知道 ~/.codex/memories 是什么——所以这件事只有 chatdex 能做。
+   *
+   * 触发它的是一次真实漏备：手工配了两个会话目录就以为齐了，
+   * 而 Codex 的记忆（git 仓但通常无远端）一直在外面。
+   */
+  function suggestCard() {
+    if (!sugg || !sugg.length) return '';
+    const missing = sugg.filter((s) => !s.covered);
+    const covered = sugg.length - missing.length;
+    if (!missing.length) {
+      return `<section class="bk-card">
+        <h2>还该备什么</h2>
+        <p class="hint">已知的 ${sugg.length} 项 agent 数据全都在备份源里了。</p>
+      </section>`;
+    }
+    return `<section class="bk-card">
+      <h2>还该备什么 <span class="muted">${missing.length} 项没备</span></h2>
+      <p class="hint">restic 只知道路径，不知道什么是 agent 的数据。这里按已知的
+        目录布局对了一遍——已覆盖 ${covered} 项，下面这些还在外面。</p>
+      <ul class="bk-sugg">${missing.map(suggRow).join('')}</ul>
+    </section>`;
+  }
+
+  function suggRow(s) {
+    return `<li${s.secrets ? ' class="has-secret"' : ''}>
+      <div class="p mono">${CD.esc(s.path)}</div>
+      <div class="w">${CD.esc(s.what)}</div>
+      ${s.secrets ? '<div class="sec">⚠️ 这个文件里通常有明文凭据 —— 备份是加密的，但要不要把它放进去请你自己决定</div>' : ''}
+      <button class="ghost sm bk-add" type="button" data-path="${CD.esc(s.path)}">加进备份源</button>
+    </li>`;
+  }
+
+  /* 一键加源：走既有的 PUT /api/config —— 配置只有一个写入口，
+   * 不为这件事新增端点。 */
+  async function addSource(path) {
+    const cfg = await CD.api('/api/config');
+    const cur = (cfg.fields || []).find((f) => f.key === 'backup.sources');
+    const list = Array.isArray(cur && cur.value) ? cur.value.slice() : [];
+    if (list.some((x) => x.path === path)) return;
+    list.push({ path, enabled: true });
+    await CD.api('/api/config', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ backup: { sources: list } }),
+    });
   }
 
   function snapsCard() {
@@ -189,6 +271,20 @@
       }
       // 备份后覆盖率必然变了，留着旧数字会撒谎
       cov = null;
+    });
+
+    root.querySelectorAll('.bk-add').forEach((b) => {
+      b.onclick = async () => {
+        b.disabled = true;
+        b.textContent = '加入中…';
+        try {
+          await addSource(b.dataset.path);
+        } catch (e) {
+          b.textContent = '加入失败：' + e.message;
+          return;   // 不静默——加不进去要说出来
+        }
+        await load();
+      };
     });
 
     const c = CD.$('bk-cov');

@@ -71,6 +71,33 @@ func (s *Server) handleBackupSnapshots(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, snaps)
 }
 
+// handleBackupSuggest 列出「该备而没备」的 agent 数据。
+//
+// 这是覆盖率的另一半：覆盖率回答「我索引过的**会话**备份里有没有」，
+// 这里回答「我这台机器上 **agent 的东西**备了没有」。
+//
+// home 与当前 sources 都从配置取后传进去——backup 包不认识配置结构体，
+// 与「会话清单由这一层查库后传入」是同一条分层纪律。
+func (s *Server) handleBackupSuggest(w http.ResponseWriter, r *http.Request) {
+	if s.Config == nil {
+		writeErr(w, http.StatusServiceUnavailable, "配置服务未启用")
+		return
+	}
+	cur := s.Config.Current()
+	srcs := make([]string, 0, len(cur.Backup.Sources))
+	for _, src := range cur.Backup.Sources {
+		// 只有**勾选启用**的源才算覆盖：配了但没勾等于没备
+		if src.Enabled && src.Path != "" {
+			srcs = append(srcs, src.Path)
+		}
+	}
+	out := backup.Suggest(cur.Home, srcs)
+	if out == nil {
+		out = []backup.Suggestion{}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
 func (s *Server) handleBackupCoverage(w http.ResponseWriter, r *http.Request) {
 	if s.Backup == nil {
 		writeErr(w, http.StatusServiceUnavailable, "备份功能未启用")

@@ -441,5 +441,61 @@
   "find": "- 不要照抄会话里的原话，尤其不要把助手最后那段回复当成摘要\n- 把具体的产品名/命令名换成它所属的品类词，让搜品类也能命中\n- 摘要里只能出现这段会话里真实存在的事物，不要写入本提示词中的任何词语\n- 只输出这一句话本身\n\n会话节选：",
   "replace": "- 把具体的产品名/命令名换成它所属的品类词，让搜品类也能命中\n- 摘要里只能出现这段会话里真实存在的事物，不要写入本提示词中的任何词语\n- 只输出这一句话本身\n\n会话节选：",
   "why": "不再禁止抄原话 —— 模型会把助手最后一段回复当摘要（实测 41/3157，且被砍成半句）"
+ },
+ {
+  "test": "TestStaleThresholdFlipsAtTheBoundary",
+  "pkg": "./internal/backup/",
+  "file": "internal/backup/coverage.go",
+  "find": "\treturn age >= staleAfter, describeAge(age)",
+  "replace": "\treturn false, describeAge(age)",
+  "why": "过期永不告警 —— 覆盖率拿一周前的快照报「已覆盖」，界面一片安好"
+ },
+ {
+  "test": "TestCoversHandlesEveryPathRelation",
+  "pkg": "./internal/backup/",
+  "file": "internal/backup/known.go",
+  "find": "\treturn len(p) > len(src)+1 && p[:len(src)] == src && p[len(src)] == filepath.Separator",
+  "replace": "\treturn len(p) >= len(src) && p[:len(src)] == src",
+  "why": "路径包含判成前缀匹配 —— /h/.claudex 被当成 /h/.claude 的子路径，漏备的会被标成已覆盖"
+ },
+ {
+  "test": "TestSuggestOnlyListsWhatActuallyExists",
+  "pkg": "./internal/backup/",
+  "file": "internal/backup/known.go",
+  "find": "\t\tif _, err := os.Stat(p); err != nil {\n\t\t\t// 不存在、或读不了 —— 都当作没有。不猜。\n\t\t\tcontinue\n\t\t}",
+  "replace": "\t\tif false {\n\t\t\tcontinue\n\t\t}",
+  "why": "不判存在性 —— 把整张表原样吐出来，让人自己分辨哪些是真缺口"
+ },
+ {
+  "test": "TestSuggestSortsByHowBadlyItHurts",
+  "pkg": "./internal/backup/",
+  "file": "internal/backup/known.go",
+  "find": "\tsort.SliceStable(out, func(i, j int) bool { return prio[out[i].Path] < prio[out[j].Path] })",
+  "replace": "\tsort.SliceStable(out, func(i, j int) bool { return out[i].Path < out[j].Path })",
+  "why": "改按字母序 —— .claude/agents 排到 .codex/memories 前面，而后者才是丢了没救的"
+ },
+ {
+  "test": "TestSuggestFlagsPathsWithSecrets",
+  "pkg": "./internal/backup/",
+  "file": "internal/backup/known.go",
+  "find": "{\"Codex\", \".codex/config.toml\", \"配置。⚠️ 这个文件里通常有明文 API key\", true, 71},",
+  "replace": "{\"Codex\", \".codex/config.toml\", \"配置。⚠️ 这个文件里通常有明文 API key\", false, 71},",
+  "why": "含凭据的不再标注 —— 等于替使用者做了「把 API key 备份进去」这个决定"
+ },
+ {
+  "test": "TestAfterScanDefaultsOn",
+  "pkg": "./internal/config/",
+  "file": "internal/config/config.go",
+  "find": "\t\t\tAfterScan: true,",
+  "replace": "\t\t\tAfterScan: false,",
+  "why": "自动备份默认关回去 —— 真机上一次都不会跑，备份静默停掉而界面正常"
+ },
+ {
+  "test": "TestSuggestDoesNotWalkTheFilesystem",
+  "pkg": "./test/e2e/",
+  "file": "internal/backup/known.go",
+  "find": "\t\tif _, err := os.Stat(p); err != nil {",
+  "replace": "\t\tif _, err := os.ReadDir(filepath.Dir(p)); err != nil {",
+  "why": "改成遍历目录 —— ~/.claude 有 5.2 GB，备份页每次打开都卡几秒而没有东西报错"
  }
 ]
