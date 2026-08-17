@@ -83,6 +83,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/backup/init", s.handleBackupInit)
 	mux.HandleFunc("GET /api/backup/coverage", s.handleBackupCoverage)
 	mux.HandleFunc("GET /api/backup/snapshots", s.handleBackupSnapshots)
+	mux.HandleFunc("GET /api/backup/suggest", s.handleBackupSuggest)
 	mux.HandleFunc("GET /api/chat/status", s.handleChatStatus)
 	mux.HandleFunc("POST /api/chat", s.handleChat)
 	mux.HandleFunc("GET /api/config", s.handleGetConfig)

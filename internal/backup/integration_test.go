@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // 用真 restic + 临时仓库跑一遍：init → backup → snapshots。
@@ -245,5 +246,111 @@ func TestCoverageTotalIsNotPageSize(t *testing.T) {
 	}
 	if len(cov.Missing) != coverageLimit {
 		t.Errorf("返回条数 = %d, want %d（限量）", len(cov.Missing), coverageLimit)
+	}
+}
+
+// 覆盖率必须交代它是拿哪一刻的快照算的。
+//
+// 不交代的话，那四个数会说谎：覆盖率永远拿「最新快照」比对，而「最新」
+// 可能是一周前——那之后新建的会话既不在「已覆盖」也不在「未覆盖」，
+// 它们压根不在比对基准里，界面上却一片安好。
+// 实测撞到过：快照停在 08-10，界面在 08-17 仍报「已覆盖 3082」。
+func TestCoverageReportsWhichSnapshotItUsed(t *testing.T) {
+	bin := findRestic(t)
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(src, "a.jsonl")
+	if err := os.WriteFile(p, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := newRunner(Config{
+		Repo: filepath.Join(dir, "repo"), ResticPath: bin, PasswordFile: writePassFile(t),
+		Sources: []Source{{Path: src, Enabled: true}},
+	})
+	ctx := context.Background()
+	if err := r.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	sessions := []IndexedSession{{Path: p, Alive: true}}
+
+	// ① 还没备过：不是「过期」，是「从没备过」——两者不能混成一个状态，
+	// 前者的下一步是「去看看为什么停了」，后者是「点一下备份」。
+	cov, err := r.Coverage(ctx, sessions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cov.SnapshotID != "" || !cov.SnapshotTime.IsZero() {
+		t.Errorf("没有快照时不该报出快照信息，实得 id=%q time=%v", cov.SnapshotID, cov.SnapshotTime)
+	}
+	if cov.Stale {
+		t.Error("「从没备过」被判成了「过期」——这是两件事")
+	}
+
+	// ② 刚备完：应当带上时间且不判过期
+	if _, err := r.Backup(ctx); err != nil {
+		t.Fatal(err)
+	}
+	cov, err = r.Coverage(ctx, sessions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cov.SnapshotTime.IsZero() {
+		t.Error("备完之后没带上快照时间 —— 那四个数就没法判断新鲜度")
+	}
+	if cov.Stale {
+		t.Errorf("刚备完就被判为过期（时间 %v，阈值 %v）", cov.SnapshotTime, staleAfter)
+	}
+	if cov.StaleFor == "" {
+		t.Error("没给出「距今多久」")
+	}
+}
+
+// 过期判定必须真的会翻。
+//
+// ⚠️ 这条测试第一版是**假的**：我在测试里重算了一遍
+// `time.Since(...) >= staleAfter`，那等于把被测逻辑抄进断言里——
+// 无论 Coverage() 怎么改它都绿。改成走真的 Coverage()，
+// 用 staleness() 这个可注入时间的入口跨阈值两侧各验一次。
+func TestStaleThresholdFlipsAtTheBoundary(t *testing.T) {
+	now := time.Now()
+	for _, c := range []struct {
+		name  string
+		age   time.Duration
+		stale bool
+	}{
+		{"刚备完", 0, false},
+		{"半天前", 12 * time.Hour, false},
+		{"差一点到阈值", staleAfter - time.Minute, false},
+		{"刚过阈值", staleAfter + time.Minute, true},
+		{"一周前（实测撞到的那种）", 7 * 24 * time.Hour, true},
+	} {
+		gotStale, gotFor := staleness(now.Add(-c.age), now)
+		if gotStale != c.stale {
+			t.Errorf("%s（%v）：判为过期=%v, want %v", c.name, c.age, gotStale, c.stale)
+		}
+		if gotFor == "" {
+			t.Errorf("%s：没给出「距今多久」", c.name)
+		}
+	}
+}
+
+// 「距今多久」要说人话，且四档都要走到。
+func TestDescribeAgeCoversEveryScale(t *testing.T) {
+	for _, c := range []struct {
+		d    time.Duration
+		want string
+	}{
+		{30 * time.Second, "刚刚"},
+		{5 * time.Minute, "5 分钟前"},
+		{3 * time.Hour, "3 小时前"},
+		{7 * 24 * time.Hour, "7 天前"},
+	} {
+		if got := describeAge(c.d); got != c.want {
+			t.Errorf("describeAge(%v) = %q, want %q", c.d, got, c.want)
+		}
 	}
 }

@@ -865,3 +865,22 @@ func TestBackupStructuralInvariants(t *testing.T) {
 		t.Error("backup 命令没带 --json —— summary 行根本不会出现")
 	}
 }
+
+// 建议列表不得递归遍历目录。
+//
+// `~/.claude` 下有 5.2 GB，走一遍要好几秒；而判断「这个路径在不在」
+// 只需要一次 os.Stat。这条不是性能洁癖——建议列表挂在请求周期里，
+// 一旦它开始遍历，备份页每次打开都要卡几秒，而没有任何东西会报错。
+func TestSuggestDoesNotWalkTheFilesystem(t *testing.T) {
+	src := readRepoFile(t, "internal/backup/known.go")
+	for _, bad := range []string{"filepath.Walk", "filepath.WalkDir", "os.ReadDir", "ioutil.ReadDir"} {
+		if strings.Contains(src, bad) {
+			t.Errorf("known.go 里用了 %s —— 建议列表只该做 os.Stat，不得遍历目录", bad)
+		}
+	}
+	// 阳性对照：确认它**确实**在用 os.Stat，否则上面那几条断言可能只是
+	// 因为这个文件根本没做任何文件系统操作而通过。
+	if !strings.Contains(src, "os.Stat") {
+		t.Error("known.go 里没有 os.Stat —— 那它是怎么判断路径存不存在的？断言的前提不成立")
+	}
+}

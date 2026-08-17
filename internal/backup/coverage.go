@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"time"
 )
 
 // 覆盖率校验是 chatdex 在这件事上**唯一无法被 restic 取代**的作用。
@@ -55,6 +56,51 @@ type Coverage struct {
 
 	// SnapshotID 是校验依据的快照；空表示仓库里还没有快照。
 	SnapshotID string `json:"snapshot_id,omitempty"`
+	// SnapshotTime 是那个快照的时间。
+	//
+	// **不带它，上面四个数就会说谎**：覆盖率永远是拿「最新快照」比对的，
+	// 而「最新」可能是一周前。那之后新建的会话一条都没备，却既不在
+	// 「已覆盖」也不在「未覆盖」——它们压根不在比对基准里，于是
+	// 界面上一片安好。实测撞到过：快照停在 08-10，界面在 08-17 仍报
+	// 「已覆盖 3082」。这与「未覆盖 183」是同一族错误：算术上对、读起来反。
+	SnapshotTime time.Time `json:"snapshot_time,omitempty"`
+	// Stale 表示这个快照已经旧到不该再当作「你受保护了」的依据。
+	//
+	// 判定放后端而不是让前端拿时间自己减：阈值只能有一处，
+	// 两处实现必然漂移（R13 的教训）。
+	Stale bool `json:"stale"`
+	// StaleFor 是人话的「距今多久」，如「7 天前」。
+	StaleFor string `json:"stale_for,omitempty"`
+}
+
+// staleAfter 是快照旧到什么程度就该告警。
+//
+// 24 小时的依据：扫描每 30 秒一轮，自动备份的最小间隔是 30 分钟，
+// 所以只要 after_scan 开着，一天之内必然备到。超过一天没备，
+// 一定是哪里停了——不是「刚好没改动」能解释的。
+const staleAfter = 24 * time.Hour
+
+// staleness 判定一个快照是否已经旧到不该再当作「你受保护了」的依据。
+//
+// now 显式传入而不是在里面调 time.Now()：否则测试只能验「刚备完不过期」
+// 那一侧，而那一侧永远绿（时间差接近 0），跨阈值那一侧根本走不到。
+func staleness(snapshotTime, now time.Time) (stale bool, describe string) {
+	age := now.Sub(snapshotTime)
+	return age >= staleAfter, describeAge(age)
+}
+
+// describeAge 把时长说成人话。只用于展示，不参与判定。
+func describeAge(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return "刚刚"
+	case d < time.Hour:
+		return fmt.Sprintf("%d 分钟前", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%d 小时前", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%d 天前", int(d.Hours()/24))
+	}
 }
 
 // IndexedSession 是索引里的一个会话，由上层从 sessions 表取。
@@ -99,7 +145,8 @@ func (r *Runner) Coverage(ctx context.Context, sessions []IndexedSession) (Cover
 		return Coverage{}, err
 	}
 
-	cov := Coverage{SnapshotID: latest.ID}
+	cov := Coverage{SnapshotID: latest.ID, SnapshotTime: latest.Time}
+	cov.Stale, cov.StaleFor = staleness(latest.Time, time.Now())
 	for _, s := range sessions {
 		switch {
 		case !inBackup[s.Path]:

@@ -113,10 +113,21 @@ func Default() Config {
 		UI:      UI{LightTheme: "desk", DarkTheme: "editor", Highlight: "theme"},
 		// 默认列出 chatdex 自己认识的两处，但都不启用——备份要用户明确开启，
 		// 不能因为装了 chatdex 就悄悄开始往某处写数据。
-		Backup: Backup{Sources: []BackupSource{
-			{Path: filepath.Join(home, ".claude", "projects")},
-			{Path: filepath.Join(home, ".codex", "sessions")},
-		}},
+		Backup: Backup{
+			Sources: []BackupSource{
+				{Path: filepath.Join(home, ".claude", "projects")},
+				{Path: filepath.Join(home, ".codex", "sessions")},
+			},
+			// 默认开着。做成默认关的那一版，在真机上**一次都没跑过**——
+			// 备份于是从配好那天起就静默停了，而界面上的「已覆盖 3082」
+			// 看起来一切正常（实测停了 7 天才被发现）。
+			// 代价很小：实测无变化时 restic 只要 767 ms 且仓库零增长。
+			//
+			// 只对新装生效——已有 config.json 里的显式取值不会被覆盖
+			// （Load 是先填默认再用文件覆盖），存量用户靠覆盖率页的
+			// 过期告警兜住。
+			AfterScan: true,
+		},
 		Home:   home,
 		DBPath: filepath.Join(home, ".local", "share", "chatdex", "index.db"),
 	}

@@ -226,6 +226,19 @@ copy is *more complete* than the index: tool results are deliberately truncated 
 
 ![Reading the original from the backup](docs/images/archived.png)
 
+**It also tells you what you are still missing.** restic sees paths; it has no idea what
+`~/.codex/memories` is. chatdex knows the layout of an agent's home, checks it against a known list,
+and shows what on this machine *should* be backed up but isn't — global instructions, your own
+skills / subagents / hooks, and Codex's memories (a git repo, but usually with local commits only and
+no remote, so losing it means losing it). One line explaining each, one click to add it as a source.
+**Paths that hold plaintext credentials are flagged but never pre-selected** — whether your API keys
+go into the backup is your call.
+
+**The coverage check says which snapshot it was computed against.** That is not decoration: coverage
+always compares against the *latest* snapshot, and "latest" might be a week old — sessions created
+since then count as neither covered nor uncovered, because they are not in the baseline at all, while
+the page looks perfectly healthy. Anything older than a day raises an explicit warning.
+
 chatdex is **not a wrapper around restic**: no scheduling, no retention policy, and it never runs a
 restore for you (the UI just shows a command you can copy). Without restic installed, indexing and
 search are unaffected — the backup entry points are greyed out with the reason shown.
