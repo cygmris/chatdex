@@ -449,11 +449,11 @@ func TestTimelineHonorsAgentFilter(t *testing.T) {
 		seed{uid: "s2", project: "/p", parent: "m1", blocks: repeatBlocks("assistant", "限流", 1)},
 	)
 	count := func(agent string) (n int, subs int) {
-		gs, err := e.Timeline(search.Query{Agent: agent})
+		res, err := e.Timeline(search.Query{Agent: agent})
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, g := range gs {
+		for _, g := range res.Groups {
 			for _, s := range g.Sessions {
 				n++
 				if s.IsSub {

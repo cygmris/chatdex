@@ -20,6 +20,6 @@ func (f fakeParser) Match(path string) bool { return strings.HasSuffix(path, f.s
 func (f fakeParser) Meta(string) (model.SessionMeta, error) {
 	return model.SessionMeta{Source: model.Source(f.name)}, nil
 }
-func (f fakeParser) Parse(io.Reader, Cursor, func(model.Block) error) (Cursor, error) {
+func (f fakeParser) Parse(io.Reader, string, Cursor, func(model.Block) error) (Cursor, error) {
 	return Cursor{}, nil
 }

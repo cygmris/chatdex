@@ -726,6 +726,9 @@ CD.fmtBytes = (n) => {
 CD.KIND_LABEL = {
   user: '我', assistant: '助手', tool_use: '工具调用',
   tool_result: '工具结果', summary: '摘要',
+  // reasoning 是模型的思考要点（Grok）。与 assistant 分开：
+  // 「说了什么」与「想了什么」是两回事，而判断依据常写在后者里。
+  reasoning: '思考',
 };
 
 CD.api = async (path, opts) => {
@@ -811,7 +814,7 @@ window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () 
 
 /* ---------------- 过滤条件（三个视图共用一份） ---------------- */
 
-CD.query = { q: '', source: '', agent: '', kind: '', tool: '', project: '', from: '', to: '' };
+CD.query = { q: '', source: '', agent: '', kind: '', tool: '', project: '', from: '', to: '', page: '' };
 
 CD.queryParams = (extra = {}) => {
   const p = new URLSearchParams();
@@ -830,6 +833,19 @@ CD.queryParams = (extra = {}) => {
 };
 
 // 把 CD.query 同步到表单控件上（左栏点项目/时间后要反映到顶部）
+// 改筛选条件就回到第一页。
+//
+// 不这么做的后果不是「页码没重置」这么轻：筛完只剩 3 个项目而你停在第 4 页，
+// 看到的是空白 —— 而**空白在界面上与「筛完就是没有」完全同形**，
+// 使用者会以为自己筛错了条件，不会想到是翻过头了。
+//
+// 集中在这一处而不是在 5 个改筛选的地方各写一遍：那正是 R13/R18 反复栽的
+// 「同一规则多处实现」。改 page 本身走 CD.query.page = ...，不经过这里。
+CD.setFilter = (patch) => {
+  Object.assign(CD.query, patch);
+  CD.query.page = '';
+};
+
 CD.syncFilterInputs = () => {
   for (const id of ['source', 'agent', 'kind', 'tool', 'from', 'to']) {
     const el = CD.$(id);
@@ -858,16 +874,53 @@ CD.view = 'search';
  */
 const ROUTE_KEYS = ['q', 'source', 'agent', 'kind', 'tool', 'project', 'from', 'to'];
 
+// page 不是筛选条件，是「翻到第几页」，且只有时间线分页。
+// 所以它**不进** ROUTE_KEYS（那是筛选参数的集合），只出现在 timeline 的归属里。
+const PAGE_KEY = 'page';
+
+// 每个视图**消费**哪些 URL 参数。**表是数据不是逻辑**：加视图只改表。
+//
+// 不带归属地写 URL 的代价是实打实的：搜过一次之后，`q` 会跟着人出现在
+// 备份 / 设置 / 生成进度这些根本不读它的页面上——除了噪音，把设置页的链接
+// 发给别人会连带把搜索词发出去。
+//
+// 判据是「前端实际发给后端什么」，不是「后端认不认」：CD.queryParams 对
+// search/timeline/digest 一视同仁发全 8 个筛选参数。
+const VIEW_PARAMS = {
+  search: ROUTE_KEYS,
+  timeline: [...ROUTE_KEYS, PAGE_KEY], // 只有它分页
+  digest: ROUTE_KEYS,
+  chat: ['project'], // 范围下拉就是它；其余它不读
+  progress: [],
+  backup: [],
+  settings: [],
+};
+
+// 认不出的视图返回空表：宁可 URL 少带，也不猜它吃什么。
+const paramsOf = (view) => VIEW_PARAMS[view] || [];
+
+// 筛选条里放的是这几个（`q` 在顶栏，不在筛选条里）。
+// 可见性由归属表推导，不再另写一份视图名清单。
+const FILTER_BAR_KEYS = ['source', 'agent', 'kind', 'tool', 'from', 'to'];
+
 CD.route = {
   // location.search → {view, query, id, seq}
   read() {
     const p = new URLSearchParams(location.search);
+    const raw = p.get('view') || '';
+    // 认不出的视图名落到检索，而不是白屏
+    const view = CD.views[raw] ? raw : 'search';
+    // **只读这个视图消费的 key。**
+    //
+    // 不属于它的 key 压根不出现在返回值里，于是 apply 的 Object.assign
+    // 不会碰内存里的原值——「URL 里没有」不等于「值是空」。全量读会让
+    // 「从检索页切到设置页再切回来」把筛选条件洗掉：设置页的 URL 本就不该
+    // 携带筛选，拿它去覆盖等于把「没有信息」当成「信息是空」。
+    // 与 R16 修的「陈旧快照冒充已覆盖」是同一族错误。
     const query = {};
-    for (const k of ROUTE_KEYS) query[k] = p.get(k) || '';
-    const view = p.get('view') || '';
+    for (const k of paramsOf(view)) query[k] = p.get(k) || '';
     return {
-      // 认不出的视图名落到检索，而不是白屏
-      view: CD.views[view] ? view : 'search',
+      view,
       query,
       id: +p.get('id') || 0,
       seq: +p.get('seq') || 0,
@@ -879,7 +932,7 @@ CD.route = {
   href(extra = {}) {
     const p = new URLSearchParams();
     p.set('view', CD.view);
-    for (const k of ROUTE_KEYS) if (CD.query[k]) p.set(k, CD.query[k]);
+    for (const k of paramsOf(CD.view)) if (CD.query[k]) p.set(k, CD.query[k]);
     for (const [k, v] of Object.entries(extra)) if (v) p.set(k, v);
     return location.pathname + '?' + p.toString();
   },
@@ -923,13 +976,28 @@ CD.route = {
 // mountView 是「按状态渲染」，谁写历史由调用方决定。
 CD.mountView = (name) => {
   if (!CD.views[name]) name = 'search';
+  // 先收旧的，再挂新的。
+  //
+  // 这一步缺席过很久，代价不是「资源没释放」这种抽象的话：progress.js 的
+  // setInterval 永不停，而它写的 root 就是所有视图共用的 #view —— 实测在
+  // 问一问输入 12 秒后，URL 与左栏都还是 chat，页面 DOM 已被就地覆写成进度页，
+  // 输入的字一起没了。unmount 在两个视图里写得一丝不苟，只是从没有人调用它。
+  //
+  // **不加 `CD.view !== name` 短路**：重挂同一个视图（popstate、或再点一次同一个
+  // tab）同样会新起一个定时器，不收旧的就是又泄漏一个 —— 现状里定时器会叠加，
+  // 正是因为 mount 直接覆盖了 timer 句柄。
+  const prev = CD.views[CD.view];
+  if (prev && prev.unmount) {
+    // 收尾失败不该把人卡在半途：报出来，然后照常挂新视图。
+    try { prev.unmount(); } catch (e) { console.error('unmount 失败:', CD.view, e); }
+  }
   CD.view = name;
   document.documentElement.dataset.view = name;
   CD.renderSide();
   const root = CD.$('view');
   root.innerHTML = '';
-  // 过滤条只对检索/时间线/摘要有意义
-  CD.$('filters').hidden = !['search', 'timeline', 'digest'].includes(name);
+  // 筛选条只对吃它那几个参数的视图有意义——从归属表推导，不另写一份视图名清单
+  CD.$('filters').hidden = !FILTER_BAR_KEYS.some((k) => paramsOf(name).includes(k));
   CD.views[name].mount(root);
 };
 
@@ -1007,7 +1075,7 @@ CD.renderSide = () => {
   side.querySelectorAll('[data-project]').forEach((el) =>
     (el.onclick = () => {
       // 左栏与顶部过滤条共用同一份 query，不各存一份
-      CD.query.project = CD.query.project === el.dataset.project ? '' : el.dataset.project;
+      CD.setFilter({ project: CD.query.project === el.dataset.project ? '' : el.dataset.project });
       CD.syncFilterInputs();
       CD.renderSide();
       CD.route.write();
@@ -1017,8 +1085,7 @@ CD.renderSide = () => {
     (el.onclick = () => {
       const d = new Date();
       d.setDate(d.getDate() - (+el.dataset.days - 1));
-      CD.query.from = d.toISOString().slice(0, 10);
-      CD.query.to = '';
+      CD.setFilter({ from: d.toISOString().slice(0, 10), to: '' });
       CD.syncFilterInputs();
       CD.renderSide();
       CD.route.write();
@@ -1026,9 +1093,7 @@ CD.renderSide = () => {
     }));
   side.querySelectorAll('[data-clear]').forEach((el) =>
     (el.onclick = () => {
-      CD.query.project = '';
-      CD.query.from = '';
-      CD.query.to = '';
+      CD.setFilter({ project: '', from: '', to: '' });
       CD.syncFilterInputs();
       CD.renderSide();
       CD.refresh();
@@ -1159,22 +1224,25 @@ CD.$('theme-btn').onclick = () => CD.theme.cycle();
 
 CD.$('search-form').onsubmit = (e) => {
   e.preventDefault();
-  CD.query.q = CD.$('q').value.trim();
+  CD.setFilter({ q: CD.$('q').value.trim() });
+  // 当前视图不吃 `q`，就把人送到吃它的那个视图去——否则按下回车什么都不会发生。
+  // 原本这里是一份硬编码的 ['chat', 'settings']，而 progress/backup 不在里面：
+  // 在那两页搜索是静默无效的。改成从归属表推导，那个缺口自然就没了。
   // 提交检索是「去了别的地方」，后退键应该能回到上一次检索
-  if (CD.view === 'chat' || CD.view === 'settings') CD.switchView('search');
+  if (!paramsOf(CD.view).includes('q')) CD.switchView('search');
   else { CD.route.write(); CD.refresh(); }
 };
 
 for (const id of ['source', 'agent', 'kind', 'tool', 'from', 'to']) {
   CD.$(id).onchange = () => {
-    CD.query[id] = CD.$(id).value;
+    CD.setFilter({ [id]: CD.$(id).value });
     // 调过滤用 replace：连调五次不该要按五次后退才能退出去（需求 1.8）
     CD.route.write({ replace: true });
     CD.refresh();
   };
 }
 CD.$('filters-clear').onclick = () => {
-  CD.query = { q: '', source: '', agent: '', kind: '', tool: '', project: '', from: '', to: '' };
+  CD.query = { q: '', source: '', agent: '', kind: '', tool: '', project: '', from: '', to: '', page: '' };
   CD.syncFilterInputs();
   CD.renderSide();
   CD.route.write({ replace: true });

@@ -124,23 +124,30 @@ func Save(path string, c Config) error {
 }
 
 // diffFromDefault 只保留与默认值不同的键，输出嵌套的 map 以便 JSON 结构与
-// 手写配置一致（section → key）。
+// 手写配置一致。
 func diffFromDefault(c Config) map[string]any {
 	def := Default()
 	out := map[string]any{}
 
+	// put 按**全部层级**建嵌套，不是只切一刀。
+	//
+	// 早先这里用 SplitN(key, ".", 2)，于是 backup.mirror.repo 被写成
+	// `backup: {"mirror.repo": …}` —— 那是个带点的字面键，Load 反序列化到
+	// 结构体时认不出它。表现是**存一次设置，异地配置就没了**，而保存请求
+	// 返回 200、界面显示成功、日志干净。是实测 PUT 之后 mirror 整个不见了
+	// 才暴露的。
 	put := func(key string, v any) {
-		parts := strings.SplitN(key, ".", 2)
-		if len(parts) == 1 {
-			out[key] = v
-			return
+		parts := strings.Split(key, ".")
+		node := out
+		for _, p := range parts[:len(parts)-1] {
+			sub, ok := node[p].(map[string]any)
+			if !ok {
+				sub = map[string]any{}
+				node[p] = sub
+			}
+			node = sub
 		}
-		sec, ok := out[parts[0]].(map[string]any)
-		if !ok {
-			sec = map[string]any{}
-			out[parts[0]] = sec
-		}
-		sec[parts[1]] = v
+		node[parts[len(parts)-1]] = v
 	}
 
 	for _, f := range Fields() {

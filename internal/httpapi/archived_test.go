@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -34,7 +35,8 @@ func (f fakeBackup) Backup(context.Context) (backup.Result, error) { return back
 func (f fakeBackup) Snapshots(context.Context) ([]backup.Snapshot, error) {
 	return nil, nil
 }
-func (f fakeBackup) Coverage(context.Context, []backup.IndexedSession) (backup.Coverage, error) {
+func (f fakeBackup) Coverage(context.Context, []backup.IndexedSession,
+	func([]string) (map[string]bool, error), backup.SeenProgress) (backup.Coverage, error) {
 	return backup.Coverage{}, nil
 }
 func (f fakeBackup) Init(context.Context) error   { return nil }
@@ -58,8 +60,24 @@ const (
 // 这样才能证明取回的内容确实来自备份、而不是又从索引读了一遍。
 func newArchivedServer(t *testing.T, b httpapi.Backuper) *httptest.Server {
 	t.Helper()
+	srv, _ := newArchivedServerAt(t, b, "")
+	return srv
+}
+
+// newArchivedServerAt 同上，但可以把源文件真写到磁盘上（onDisk 非空时）。
+// 返回源文件路径，便于测试删掉它来切换来源。
+func newArchivedServerAt(t *testing.T, b httpapi.Backuper, onDisk string) (*httptest.Server, string) {
+	t.Helper()
 	home := t.TempDir()
 	path := filepath.Join(home, ".claude", "projects", "-proj-alpha", "u1.jsonl")
+	if onDisk != "" {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(onDisk), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	st, err := index.Open(filepath.Join(t.TempDir(), "index.db"))
 	if err != nil {
@@ -89,7 +107,7 @@ func newArchivedServer(t *testing.T, b httpapi.Backuper) *httptest.Server {
 	}).Register(mux)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
-	return srv
+	return srv, path
 }
 
 // 取回的必须是**备份里的原件**，不是索引里那份有损的副本。
@@ -197,5 +215,72 @@ func TestAutoBackupFailureIsVisibleInStatus(t *testing.T) {
 	}
 	if got.LastAuto == nil || got.LastAuto.Error != "仓库锁没释放" {
 		t.Errorf("自动备份的失败原因没带到界面上：%+v", got.LastAuto)
+	}
+}
+
+// 源文件还在磁盘上时，原件直接从磁盘读，不绕 restic。
+//
+// 实测规模：85229 个块被截断，涉及 3438 个会话，其中 **1912 个会话
+// （73231 块）的源文件还在**。为这些绕一趟 restic 既慢又拿到旧内容——
+// 备份里那份是某个快照时刻的副本，而磁盘上那份是现在的。
+//
+// **配了来源对照**：删掉源文件后同一个会话必须落到 backup。没有这条，
+// 一个恒返回 "disk" 的实现也能通过上面的断言。
+func TestArchivedPrefersDiskOverBackup(t *testing.T) {
+	// 备份里放一份**内容不同**的，这样来源认错会当场露馅
+	const backupVersion = `{"type":"user","timestamp":"2026-01-01T00:00:00Z","sessionId":"u1","cwd":"/proj/alpha","message":{"role":"user","content":"这是备份里那份，不该被选中"}}
+`
+	srv, path := newArchivedServerAt(t, fakeBackup{content: backupVersion}, archivedFull)
+
+	var got struct {
+		search.SessionView
+		Origin string `json:"origin"`
+	}
+	if code := getJSON(t, srv.URL+"/api/session/1/archived", &got); code != 200 {
+		t.Fatalf("状态码 = %d, want 200", code)
+	}
+	if got.Origin != "disk" {
+		t.Errorf("origin = %q, want disk —— 源文件就在磁盘上，不该绕 restic", got.Origin)
+	}
+	last := got.Messages[len(got.Messages)-1]
+	if !strings.Contains(last.Body, "只有备份里的原件才有") {
+		t.Errorf("读到的不是磁盘上那份完整原件：%q", last.Body)
+	}
+
+	// 🔴 来源对照：把源文件删掉，同一个会话必须落到 backup。
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	var fallback struct {
+		search.SessionView
+		Origin string `json:"origin"`
+	}
+	if code := getJSON(t, srv.URL+"/api/session/1/archived", &fallback); code != 200 {
+		t.Fatalf("退回备份时状态码 = %d", code)
+	}
+	if fallback.Origin != "backup" {
+		t.Fatalf("对照失败：源文件已删，origin 仍是 %q —— 说明来源选择根本没在选", fallback.Origin)
+	}
+	if !strings.Contains(fallback.Messages[0].Body, "这是备份里那份") {
+		t.Errorf("退回后读到的不是备份那份：%q", fallback.Messages[0].Body)
+	}
+}
+
+// 没配备份，但源文件在磁盘上 —— 看原件仍然可用。
+//
+// 旧实现在函数入口就 `if s.Backup == nil { 503 }`，于是没装 restic 的人
+// 连看自己磁盘上的文件都不行。守卫该放在「确实要用备份」那一刻。
+func TestArchivedWorksWithoutBackupWhenFileOnDisk(t *testing.T) {
+	srv, _ := newArchivedServerAt(t, nil, archivedFull)
+
+	var got struct {
+		search.SessionView
+		Origin string `json:"origin"`
+	}
+	if code := getJSON(t, srv.URL+"/api/session/1/archived", &got); code != 200 {
+		t.Fatalf("状态码 = %d, want 200 —— 没配备份不该挡住读磁盘上的原件", code)
+	}
+	if got.Origin != "disk" {
+		t.Errorf("origin = %q, want disk", got.Origin)
 	}
 }

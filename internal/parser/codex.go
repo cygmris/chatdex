@@ -118,7 +118,7 @@ func (c Codex) Meta(path string) (model.SessionMeta, error) {
 	return m, nil
 }
 
-func (c Codex) Parse(r io.Reader, start Cursor, emit func(model.Block) error) (Cursor, error) {
+func (c Codex) Parse(r io.Reader, _ string, start Cursor, emit func(model.Block) error) (Cursor, error) {
 	cur := start
 	toolNames := map[string]string{} // call_id -> 工具名
 	sawUser := start.Offset > 0

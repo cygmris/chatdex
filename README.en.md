@@ -1,6 +1,6 @@
 # chatdex
 
-**Make every past Claude Code and Codex session searchable.** Runs locally, reads only, never phones home.
+**Make every past Claude Code, Codex, and Grok CLI session searchable.** Runs locally, reads only, never phones home.
 
 [简体中文](README.md) | English
 
@@ -27,7 +27,7 @@
 
 ## Why
 
-`~/.claude/projects/` and `~/.codex/sessions/` hold your entire working history. `grep` doesn't cut it:
+`~/.claude/projects/`, `~/.codex/sessions/`, and `~/.grok/sessions/` hold your entire working history. `grep` doesn't cut it:
 
 - **CJK doesn't match.** SQLite FTS5's `unicode61` treats a whole Chinese sentence as one token, so
   searching 「限流」 never finds 「请求限流」.
@@ -50,7 +50,7 @@ chatdex has a specific answer to each, with measured numbers behind it — see
 | 🧠 **Summaries are indexed too** | A local LLM writes one line per session, **rephrasing in conceptual terms** — which is what closes the vocabulary gap above |
 | 💬 **Ask** | Ask in plain language; the LLM rewrites its query and retries across rounds, and **shows you every query it tried**; scope it to a single project or ask across everything |
 | 🏷 **Session names** | A name you set with `/rename` takes precedence over the LLM summary — what you called it beats what a model guessed |
-| 🕘 **Timeline & transcript replay** | Grouped by project; click through to read the original exchange, paginated for long sessions |
+| 🕘 **Timeline & transcript replay** | Grouped by project, paginated by project; filters apply here too; click through to read the original exchange, paginated for long sessions; **click “truncated” to open the original** (from disk if the file is still there, from the backup otherwise) |
 | 🧬 **Subagents linked up** | Nearly half the sessions are subagents (48.5% on this machine). Filter to main sessions only or subagents only; expand a main session to see the subagents it dispatched, and jump back from a subagent to its parent |
 | 📝 **Markdown, ANSI & syntax highlighting** | Assistant output renders as Markdown; ANSI colours in command output are coloured; code and commands are syntax-highlighted (colour scheme selectable, the default follows the interface theme); mermaid diagrams render on click. One click switches the transcript back to **raw bytes** |
 | 🔗 **Shareable links** | View, query, every filter, and the session you're reading all live in the URL — send it to someone and they get the same result. The back button works too |

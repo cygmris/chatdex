@@ -45,7 +45,16 @@ type Parser interface {
 	// Parse 从 start 位置续读并逐块回调 emit，返回新的进度。
 	// 调用方负责把 r 定位到 start.Offset。
 	// 单行解析失败只跳过该行并累计到 Cursor.Skipped，不得中断整个文件。
-	Parse(r io.Reader, start Cursor, emit func(model.Block) error) (Cursor, error)
+	//
+	// path 是这个文件的绝对路径。**Grok 需要它**：它的正文 chat_history.jsonl
+	// 里没有任何时间字段，而每个块都得有 ts —— 时间戳只能从**同目录的**
+	// events.jsonl 取，那就必须知道自己在哪。
+	//
+	// 为什么不是「Meta 先把路径存起来、Parse 再读」：那依赖「Meta 先跑、Parse
+	// 后跑、且是同一个文件」这个**接口从没承诺过**的调用顺序。扫描器哪天改成
+	// 并发，错的表现是**时间戳串到别的会话上**——没有任何报错，也不会有测试变红。
+	// 多传一个参数则漏改会在编译期爆出来（决策 33 那一族的反面用法）。
+	Parse(r io.Reader, path string, start Cursor, emit func(model.Block) error) (Cursor, error)
 }
 
 // Registry 是解析器集合。

@@ -34,7 +34,7 @@ func parseFile(t *testing.T, p Parser, path string, start Cursor) ([]model.Block
 		}
 	}
 	var got []model.Block
-	cur, err := p.Parse(f, start, func(b model.Block) error {
+	cur, err := p.Parse(f, path, start, func(b model.Block) error {
 		got = append(got, b)
 		return nil
 	})
@@ -187,7 +187,7 @@ func TestClaudePartialLineNotCounted(t *testing.T) {
 	partial := `{"type":"user","message":{"role":"user","content":"这一行还`
 
 	var got []model.Block
-	cur, err := c.Parse(strings.NewReader(complete+partial), Cursor{}, func(b model.Block) error {
+	cur, err := c.Parse(strings.NewReader(complete+partial), "x.jsonl", Cursor{}, func(b model.Block) error {
 		got = append(got, b)
 		return nil
 	})
@@ -245,7 +245,7 @@ func TestClaudeParsesSessionTitle(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			src := strings.Join(c.lines, "\n") + "\n"
 			var got []model.Block
-			cur, err := Claude{}.Parse(strings.NewReader(src), Cursor{},
+			cur, err := Claude{}.Parse(strings.NewReader(src), "x.jsonl", Cursor{},
 				func(b model.Block) error { got = append(got, b); return nil })
 			if err != nil {
 				t.Fatal(err)

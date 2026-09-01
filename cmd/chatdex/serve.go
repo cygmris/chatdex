@@ -77,6 +77,20 @@ func runServe(args []string) error {
 		}
 	}}
 	api.Backup = bk
+	// 全快照并集索引：覆盖率靠它回答「源没了的会话还救不救得回来」。
+	// 首次要扫全部快照（实测 566 个 × 约 1 秒 ≈ 9.4 分钟），所以后台跑、
+	// 不阻塞任何请求；页面按进度显示「还在建立索引」而不是给一个不可信的数。
+	api.Mirror = &backup.Mirror{Local: bk, Cfg: func() backup.MirrorConfig {
+		m := live.Get().Backup.Mirror
+		return backup.MirrorConfig{Repo: m.Repo, EnvFile: m.EnvFile, RclonePath: m.RclonePath}
+	}}
+	seen := backup.NewSeenScanner(bk, st, slog.Default())
+	api.SeenScanner = seen
+	go func() {
+		if err := seen.Scan(context.Background()); err != nil {
+			slog.Warn("全快照路径索引失败", "err", err)
+		}
+	}()
 	api.Config = &configStore{
 		live: live, path: *cfgPath, newLLM: llm.NewOllama,
 	}
@@ -116,7 +130,7 @@ func runServe(args []string) error {
 	mcpserver.Register(mux, engine)
 	dashboard.Register(mux)
 
-	go scanLoop(sc, live, bk)
+	go scanLoop(sc, live, bk, seen, api.Mirror)
 
 	// 会话名回填：只跑一次，异步——它要扫全部源文件（实测 3.1 GB / 17 秒），
 	// 放同步路径上会让服务启动肉眼可见地卡一下，而检索本可以立刻用。
@@ -184,7 +198,7 @@ const autoBackupTimeout = 20 * time.Minute
 // scanLoop 后台增量扫描，保持索引最新（需求 5.2）。
 //
 // bk 可为 nil（备份是可选依赖）。
-func scanLoop(sc *index.Scanner, live *config.Live, bk *backup.Runner) {
+func scanLoop(sc *index.Scanner, live *config.Live, bk *backup.Runner, seen *backup.SeenScanner, mirror *backup.Mirror) {
 	var lastBackup time.Time
 	for {
 		c := live.Get()
@@ -217,6 +231,29 @@ func scanLoop(sc *index.Scanner, live *config.Live, bk *backup.Runner) {
 					} else {
 						slog.Info("扫描后自动备份完成", "snapshot", res.SnapshotID,
 							"new", res.FilesNew, "bytes", res.BytesAdded)
+						// 新快照要立刻并进全快照索引，否则它永远差最新那几个，
+						// SeenReady 恒为假 —— 而那意味着覆盖率页上的
+						// 「永久丢失」**永远不显示**。实测过：只在启动时扫一次的话，
+						// 半小时后就停在 570/571 再也不动。
+						if seen != nil {
+							if err := seen.Scan(ctx); err != nil {
+								slog.Warn("全快照路径索引失败", "err", err)
+							}
+						}
+						// 异地同步跟在备份后面。
+						//
+						// **默认关**：它要往外发数据、要凭据、要带宽，这三件事
+						// 都不该由一个默认值替使用者决定（与 after_scan 不同——
+						// 那个只在本机写自己的盘，开着的代价实测是 767 ms）。
+						// 关着也不会让人蒙在鼓里：状态卡会一直报「落后 N 个快照」。
+						if mirror != nil && live.Get().Backup.Mirror.AfterBackup {
+							if r, err := mirror.Sync(ctx); err != nil {
+								slog.Warn("异地同步失败", "err", err)
+							} else {
+								slog.Info("异地同步完成", "checked", r.Checked,
+									"verified", r.Verified, "seconds", r.Seconds)
+							}
+						}
 					}
 				}()
 			}

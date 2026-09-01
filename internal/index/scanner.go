@@ -193,7 +193,7 @@ func (s *Scanner) indexFile(p parser.Parser, path string, rep *Report) error {
 	}
 
 	var blocks []model.Block
-	cur, err := p.Parse(f, start, func(b model.Block) error {
+	cur, err := p.Parse(f, path, start, func(b model.Block) error {
 		blocks = append(blocks, s.applyPolicy(b))
 		return nil
 	})

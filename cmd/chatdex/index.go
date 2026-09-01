@@ -22,6 +22,7 @@ func openIndex(cfg config.Config) (*index.Store, *index.Scanner, error) {
 		Reg: parser.NewRegistry(
 			parser.Claude{Home: cfg.Home},
 			parser.Codex{Home: cfg.Home},
+			parser.Grok{Home: cfg.Home},
 		),
 		Cfg: cfg.Index,
 	}

@@ -84,6 +84,17 @@ func Fields() []FieldMeta {
 			Help: "勾选要备份的目录，可只备其中一个也可全部。默认列出会话目录，也可加任意其它路径。"},
 		{Key: "backup.after_scan", Label: "扫描后顺手备一次", Kind: "bool", Hot: true, Group: "备份",
 			Help: "实测无变化时 restic 只需 767 ms 且仓库零增长，所以这个开关很便宜。"},
+		{Key: "backup.mirror.repo", Label: "异地仓地址", Kind: "string", Hot: true, Optional: true, Group: "备份",
+			Help: "把本地仓再镜像一份到 S3 / R2，形如 s3:https://<账号>.r2.cloudflarestorage.com/<桶>/<前缀>。" +
+				"留空 = 没有异地副本：盘坏了能救，机器整台没了就全没了。"},
+		{Key: "backup.mirror.env_file", Label: "异地仓凭据文件", Kind: "string", Hot: true, Optional: true, Group: "备份",
+			Help: "一个 KEY=VALUE 文件，含 AWS_ACCESS_KEY_ID 与 AWS_SECRET_ACCESS_KEY。" +
+				"⚠️ 凭据只填路径不填值——这份配置会下发给界面、也会进备份。"},
+		{Key: "backup.mirror.after_backup", Label: "备份后自动同步到异地", Kind: "bool", Hot: true, Group: "备份",
+			Help: "默认关：同步要往外发数据、要凭据、要带宽，这三件事不该由默认值替你决定。" +
+				"关着也不会让你蒙在鼓里——备份页会一直报「异地副本落后 N 个快照」。"},
+		{Key: "backup.mirror.rclone_path", Label: "rclone 可执行文件", Kind: "string", Hot: true, Optional: true, Group: "备份",
+			Help: "留空则从 PATH 找。同步靠它执行（chatdex 不自研 S3 客户端）。"},
 
 		// ---- 需重启 ----
 		{Key: "ports.ui", Label: "dashboard 端口", Kind: "int", Hot: false, Group: "服务",
@@ -142,6 +153,14 @@ func (c Config) Get(key string) any {
 		return c.Backup.Sources
 	case "backup.after_scan":
 		return c.Backup.AfterScan
+	case "backup.mirror.repo":
+		return c.Backup.Mirror.Repo
+	case "backup.mirror.env_file":
+		return c.Backup.Mirror.EnvFile
+	case "backup.mirror.after_backup":
+		return c.Backup.Mirror.AfterBackup
+	case "backup.mirror.rclone_path":
+		return c.Backup.Mirror.RclonePath
 	case "ports.ui":
 		return c.Ports.UI
 	case "ports.api":

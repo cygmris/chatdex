@@ -240,17 +240,52 @@ func (w *Worker) gen(ctx context.Context, system, prompt string) (string, error)
 	return tidy(out), nil
 }
 
+// breakChars 是可以断句的位置：中英文标点与空白。
+//
+// 用于超长截断时往回找一个不难看的落点。
+var breakChars = map[rune]bool{
+	'。': true, '！': true, '？': true, '；': true, '，': true, '、': true, '：': true,
+	'.': true, '!': true, '?': true, ';': true, ',': true, ':': true,
+	' ': true, '\t': true, ')': true, '）': true, ']': true, '】': true,
+}
+
 // tidy 收拾模型输出：去掉常见的引号包裹与多余换行，并按上限截断。
+//
+// **截断要断在标点处，并留下 `…`。**
+//
+// 旧实现是硬切第 maxSummaryChars 个字符，代价实测得到：3463 条摘要里有
+// 212 条（6.1%）正好卡在 120 字，且**断在词中间**——
+// `/home/<user>/workspace/<proj>/websi`、`-observability.md，408行；关键发现：Hoo`。
+// 断在这种位置比长一点糟得多。
+//
+// `…` 不是装饰：没有它，「模型只写了这么多」与「系统把它截了」在输出上完全
+// 同形，读的人分不出来。一个字符的成本换一个明确的信号。
 func tidy(s string) string {
 	s = strings.TrimSpace(s)
 	s = strings.ReplaceAll(s, "\n", " ")
 	s = strings.Trim(s, `"“”'`)
 	s = strings.TrimSpace(s)
+
 	r := []rune(s)
-	if len(r) > maxSummaryChars {
-		s = string(r[:maxSummaryChars])
+	if len(r) <= maxSummaryChars {
+		return s
 	}
-	return s
+	// 留一个字符给 `…`
+	limit := maxSummaryChars - 1
+	cut := -1
+	for i := limit - 1; i >= 0; i-- {
+		if breakChars[r[i]] {
+			cut = i
+			break
+		}
+	}
+	if cut < 0 {
+		// 整段没有任何标点或空白 —— 断在哪都一样难看，退回硬切保证有上界
+		cut = limit
+	} else {
+		cut++ // 把断点那个标点本身留下
+	}
+	return strings.TrimRight(string(r[:cut]), " \t") + "…"
 }
 
 // loadMessages 分页取全部消息（回读接口单次有上限）。

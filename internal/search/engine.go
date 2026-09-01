@@ -142,6 +142,30 @@ func (q Query) agentFilter() string {
 	return ""
 }
 
+// sessionScopeFilters 是**只作用在 sessions 这一行本身**的条件（都写在 `s.` 上）。
+//
+// 抽出来是因为检索与时间线都要它，而此前 source / project / agent 三条在
+// filters() 与 sessionFilters() 里**各写了一遍**。同一个条件写两遍，早晚有一边
+// 改了另一边没改，而表现是「时间线筛得对、检索筛不对」这种没人会立刻发现的偏差。
+//
+// 只放会话级条件：kind / tool / q 在两边语义本就不同（检索是「这个块满足」，
+// 时间线是「这个会话里存在满足的块」），强行合并只会造出一个两边都不像的东西。
+func (q Query) sessionScopeFilters() (string, []any) {
+	var sb strings.Builder
+	var args []any
+	if q.Source != "" {
+		sb.WriteString(" AND s.source = ?")
+		args = append(args, q.Source)
+	}
+	sb.WriteString(q.agentFilter())
+	if q.Project != "" {
+		// 子目录下产生的会话也算「该工作目录下」
+		sb.WriteString(" AND (s.project_path = ? OR s.project_path LIKE ?)")
+		args = append(args, q.Project, q.Project+"/%")
+	}
+	return sb.String(), args
+}
+
 func (q Query) filters() (string, []any) {
 	var sb strings.Builder
 	var args []any
@@ -156,16 +180,9 @@ func (q Query) filters() (string, []any) {
 		sb.WriteString(" AND b.tool_name = ?")
 		args = append(args, q.ToolName)
 	}
-	if q.Source != "" {
-		sb.WriteString(" AND s.source = ?")
-		args = append(args, q.Source)
-	}
-	sb.WriteString(q.agentFilter())
-	if q.Project != "" {
-		// 子目录下产生的会话也算「该工作目录下」
-		sb.WriteString(" AND (s.project_path = ? OR s.project_path LIKE ?)")
-		args = append(args, q.Project, q.Project+"/%")
-	}
+	scope, scopeArgs := q.sessionScopeFilters()
+	sb.WriteString(scope)
+	args = append(args, scopeArgs...)
 	if q.From > 0 {
 		sb.WriteString(" AND b.ts >= ?")
 		args = append(args, q.From)

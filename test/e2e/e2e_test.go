@@ -175,29 +175,46 @@ func TestSearchThenRead(t *testing.T) {
 func TestTimeline(t *testing.T) {
 	e := start(t)
 
-	var gs []struct {
-		ProjectPath string `json:"project_path"`
-		Total       int    `json:"total"`
-		Sessions    []struct {
-			Label string `json:"label"`
-		} `json:"sessions"`
-	}
-	if code := getJSON(e.apiPort, "/api/timeline", &gs); code != 200 {
-		t.Fatalf("时间线状态码 = %d", code)
-	}
-	if len(gs) != 1 || gs[0].ProjectPath != "/home/demo" {
-		t.Fatalf("时间线 = %+v", gs)
-	}
-	// 没有摘要（LLM 不可用）时退回首条用户消息
-	if !strings.Contains(gs[0].Sessions[0].Label, "TimeMachine") {
-		t.Errorf("辨识文字 = %q", gs[0].Sessions[0].Label)
+	// 响应是对象不是数组：数组里没有地方放「一共多少个项目」，
+	// 而没有那个数，界面就说不出「还有多少你没看到」。
+	type timelineResp struct {
+		Groups []struct {
+			ProjectPath string `json:"project_path"`
+			Total       int    `json:"total"`
+			Sessions    []struct {
+				Label string `json:"label"`
+			} `json:"sessions"`
+		} `json:"groups"`
+		ProjectTotal int `json:"project_total"`
+		Offset       int `json:"offset"`
+		Limit        int `json:"limit"`
 	}
 
-	// 过滤：来源不匹配则为空
-	var none []any
+	var res timelineResp
+	if code := getJSON(e.apiPort, "/api/timeline", &res); code != 200 {
+		t.Fatalf("时间线状态码 = %d", code)
+	}
+	if len(res.Groups) != 1 || res.Groups[0].ProjectPath != "/home/demo" {
+		t.Fatalf("时间线 = %+v", res.Groups)
+	}
+	if res.ProjectTotal != 1 {
+		t.Errorf("ProjectTotal = %d, want 1", res.ProjectTotal)
+	}
+	// 没有摘要（LLM 不可用）时退回首条用户消息
+	if !strings.Contains(res.Groups[0].Sessions[0].Label, "TimeMachine") {
+		t.Errorf("辨识文字 = %q", res.Groups[0].Sessions[0].Label)
+	}
+
+	// 过滤：来源不匹配则为空，且 **ProjectTotal 也要跟着变成 0**。
+	// 只断言 groups 为空是不够的——「筛完没有」与「翻过头了」在 groups 上同形，
+	// ProjectTotal 是唯一能把两者分开的信号。
+	var none timelineResp
 	getJSON(e.apiPort, "/api/timeline?source=codex", &none)
-	if len(none) != 0 {
-		t.Errorf("source=codex 应无结果: %+v", none)
+	if len(none.Groups) != 0 {
+		t.Errorf("source=codex 应无结果: %+v", none.Groups)
+	}
+	if none.ProjectTotal != 0 {
+		t.Errorf("source=codex 时 ProjectTotal = %d, want 0", none.ProjectTotal)
 	}
 }
 

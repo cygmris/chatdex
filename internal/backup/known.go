@@ -68,6 +68,11 @@ var knownPaths = []KnownPath{
 	// —— 配置：重装能重配，但会很烦
 	{"Claude Code", ".claude/settings.json", "设置（模型、钩子、插件开关）", false, 70},
 	{"Codex", ".codex/config.toml", "配置。⚠️ 这个文件里通常有明文 API key", true, 71},
+
+	// —— Grok CLI
+	{"Grok", ".grok/sessions", "全部会话", false, 12},
+	{"Grok", ".grok/skills", "自建 skill", false, 42},
+	{"Grok", ".grok/config.toml", "配置", false, 72},
 }
 
 // knownExcluded 是**刻意不备**的东西，连同理由。
@@ -83,6 +88,13 @@ var knownExcluded = map[string]string{
 	".codex/memories_1.sqlite":       "记忆流水线的工作队列与中间产物，可从 memories/ 的 markdown 与会话重建；且它是 WAL 模式，只备 .sqlite 不带 -wal/-shm 会拿到撕裂的副本",
 	".codex/logs_2.sqlite":           "日志，247 MB，派生物",
 	".codex/thread_history_1.sqlite": "会话历史的 sqlite 副本，原件在 sessions/",
+	// ⚠️ .grok/auth.json 是**凭据**，刻意不建议备份 —— restic 会加密，
+	// 但「要不要把登录凭据放进备份」是使用者自己的决定，不是我们替他做的。
+	".grok/auth.json":         "登录凭据，不代使用者决定要不要备份",
+	".grok/downloads":         "下载的二进制，可重新下载",
+	".grok/marketplace-cache": "插件市场缓存，可重建",
+	".grok/logs":              "日志，派生物",
+	".grok/memtrace":          "内存追踪，派生物",
 }
 
 // Suggestion 是一条建议，带上它当前是否已被覆盖。

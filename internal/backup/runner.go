@@ -53,6 +53,11 @@ type Config struct {
 	PasswordFile string
 	ResticPath   string // 空 = 从 PATH 找
 	Sources      []Source
+	// Env 是额外的环境变量（KEY=VALUE），给异地仓传 S3 凭据用。
+	//
+	// 凭据走这里而不是 Config 的具名字段：它们只在异地那条路径上有意义，
+	// 而且**不该有机会被序列化进 config.json**（那个文件会下发给界面、也会进备份）。
+	Env []string
 }
 
 // Runner 执行 restic 命令。
@@ -107,7 +112,7 @@ func (c Config) env() []string {
 	if c.PasswordFile != "" {
 		env = append(env, "RESTIC_PASSWORD_FILE="+c.PasswordFile)
 	}
-	return env
+	return append(env, c.Env...)
 }
 
 // run 执行一条 restic 命令并返回 stdout。

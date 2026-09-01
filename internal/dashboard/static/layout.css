@@ -257,6 +257,10 @@ mark {
   color: var(--fg-dim);
   font-size: 11.5px;
 }
+.reader-pager { flex-wrap: wrap; }
+.reader-page-form { display: inline-flex; gap: 4px; align-items: center; }
+.reader-page-input { width: 5em; padding: 3px 6px; font-size: 11px; }
+.reader-range { font-family: var(--mono); }
 
 .hint { color: var(--fg-dim); padding: 14px 11px; }
 .err { color: var(--danger); padding: 14px 11px; }
@@ -302,6 +306,9 @@ mark {
 .msg.assistant { border-color: var(--fg-dim); }
 .msg.tool_use { border-color: var(--hit-fg); }
 .msg.tool_result { border-color: var(--line); }
+/* 思考要点：比正式回复弱一档，它是过程不是结论。用既有 token，不引入新配色。 */
+.msg.reasoning { border-color: var(--line); opacity: .82; }
+.msg.reasoning .role { font-style: italic; }
 .msg.summary { border-color: var(--hit-fg); }
 .msg.target { background: var(--panel-2); }
 
@@ -316,7 +323,19 @@ mark {
 .msg-head .role { color: var(--fg); font-family: var(--sans); }
 .msg .md { margin-top: 4px; }
 .msg-head .tool { color: var(--accent); }
-.msg-head .trunc { color: var(--hit-fg); }
+/* 「已截断」现在是个按钮（点它去看原件）。按钮默认自带边框与背景，
+   这里剥回角标的样子——它在信息层级上仍是角标，只是能点。 */
+.msg-head .trunc {
+  color: var(--hit-fg);
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+.msg-head .trunc:hover { text-decoration-style: solid; }
 
 .msg pre {
   margin: 4px 0 0;
@@ -331,6 +350,22 @@ mark {
 }
 
 /* ---------------- 时间线 ---------------- */
+
+/* 时间线的项目分页条。上下各一份：项目组高，翻完一页要滚回顶部才能翻下一页
+   是纯粹的浪费。用既有的 .ghost 按钮与 --line/--muted 令牌，不引入新配色。 */
+.tl-pager {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  padding: 8px 11px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+.tl-pager:last-child { border-bottom: 0; border-top: 1px solid var(--line); margin: 12px 0 0; }
+.tl-pager-btns { display: flex; gap: 6px; align-items: center; }
+.tl-pager button[disabled] { opacity: .4; cursor: default; }
 
 .group { margin-bottom: 18px; }
 .group-head {

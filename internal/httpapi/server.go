@@ -33,7 +33,8 @@ type Backuper interface {
 	Available(ctx context.Context) backup.Status
 	Backup(ctx context.Context) (backup.Result, error)
 	Snapshots(ctx context.Context) ([]backup.Snapshot, error)
-	Coverage(ctx context.Context, sessions []backup.IndexedSession) (backup.Coverage, error)
+	Coverage(ctx context.Context, sessions []backup.IndexedSession,
+		seenInAny func([]string) (map[string]bool, error), progress backup.SeenProgress) (backup.Coverage, error)
 	Fetch(ctx context.Context, path string) (io.ReadCloser, error)
 	LastAuto() *backup.AutoResult
 	Init(ctx context.Context) error
@@ -60,6 +61,12 @@ type Server struct {
 	// Reg 用于解析从备份里取回的原件。与索引用的是同一套解析器——
 	// 备份里的原件和源目录里的文件是同一种东西，两套解析必然漂移。
 	Reg *parser.Registry
+	// Mirror 报告异地副本落后多少，可为 nil（与 Backup 同生同灭）。
+	Mirror *backup.Mirror
+	// SeenScanner 维护「曾出现在任一快照里」的并集索引，可为 nil（与 Backup 同生同灭）。
+	// 覆盖率靠它回答「源没了的会话还救不救得回来」——只看最新快照答不出，
+	// 因为消失的文件按定义就不在最新快照里。
+	SeenScanner *backup.SeenScanner
 }
 
 // Register 把 API 路由挂到 mux 上。
@@ -82,6 +89,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/backup/run", s.handleBackupRun)
 	mux.HandleFunc("POST /api/backup/init", s.handleBackupInit)
 	mux.HandleFunc("GET /api/backup/coverage", s.handleBackupCoverage)
+	mux.HandleFunc("POST /api/backup/mirror/sync", s.handleMirrorSync)
 	mux.HandleFunc("GET /api/backup/snapshots", s.handleBackupSnapshots)
 	mux.HandleFunc("GET /api/backup/suggest", s.handleBackupSuggest)
 	mux.HandleFunc("GET /api/chat/status", s.handleChatStatus)

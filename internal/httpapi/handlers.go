@@ -190,15 +190,17 @@ func (s *Server) handleSummaryProgress(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleTimeline(w http.ResponseWriter, r *http.Request) {
 	// 与检索共用同一套过滤条件解析（需求 9.4）
-	gs, err := s.Engine.Timeline(parseQuery(r))
+	res, err := s.Engine.Timeline(parseQuery(r))
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if gs == nil {
-		gs = []search.ProjectGroup{}
+	// 空结果下发 [] 而不是 null：否则前端每个用到它的地方都得各写一次判空，
+	// 漏一处就是运行时报错（subagent-view 那期栽过）。
+	if res.Groups == nil {
+		res.Groups = []search.ProjectGroup{}
 	}
-	writeJSON(w, http.StatusOK, gs)
+	writeJSON(w, http.StatusOK, res)
 }
 
 func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {

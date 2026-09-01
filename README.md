@@ -1,6 +1,6 @@
 # chatdex
 
-**把 Claude Code 与 Codex 的全部历史会话变成可检索的东西。** 本地常驻，只读，不联网。
+**把 Claude Code、Codex 与 Grok CLI 的全部历史会话变成可检索的东西。** 本地常驻，只读，不联网。
 
 简体中文 | [English](README.en.md)
 
@@ -20,7 +20,7 @@
 
 ## 它解决什么
 
-`~/.claude/projects/` 和 `~/.codex/sessions/` 里堆着你全部的工作记录。`grep` 撑不住，因为：
+`~/.claude/projects/`、`~/.codex/sessions/` 和 `~/.grok/sessions/` 里堆着你全部的工作记录。`grep` 撑不住，因为：
 
 - **中文搜不到。** SQLite FTS5 的 `unicode61` 把一整句中文当成一个 token，搜「限流」搜不出「请求限流」。
 - **命中最多 ≠ 你要找的。** 真实语料实测：命中最多的两个会话（2272 / 2154 次）都不是目标，
@@ -38,7 +38,7 @@ chatdex 对这四条各有对策，且都有实测数字撑着——见 [`docs/a
 | 🧠 **摘要一并入索引** | 本地 LLM 给每个会话写一句话摘要，**用概念词重写原文**——这正是填平上面那条词汇鸿沟的手段 |
 | 💬 **问一问** | 用大白话提问，LLM 多轮改写查询自己重试，并**把每一轮搜了什么都摊开给你看**；可限定在某个项目内问，也可全库问 |
 | 🏷 **会话名** | 你 `/rename` 起的名字优先于 LLM 摘要显示——人写的比机器猜的可信 |
-| 🕘 **时间线与会话回读** | 按项目聚合；点进去逐条回读原始对话，长会话分页 |
+| 🕘 **时间线与会话回读** | 按项目聚合、按项目翻页；筛选条件同样生效；点进去逐条回读原始对话，长会话分页；**「已截断」可点开看原件**（源文件还在读磁盘，没了走备份） |
 | 🧬 **子代理串起来** | 近一半会话是子代理（本机 48.5%）。可以只看主会话、只看子代理；主会话能展开它派出去的子代理，子代理能一键跳回主会话 |
 | 📝 **Markdown / ANSI / 语法高亮** | assistant 输出按 Markdown 显示，命令输出的颜色码正确上色，代码与命令有语法高亮（配色可选，默认跟随界面主题）；mermaid 图点一下才渲染；回读页可一键切回**原文**看原始字节 |
 | 🔗 **可分享的链接** | 视图、检索词、全部过滤条件、正在读的会话都在 URL 里——发给别人能还原同样的结果，后退键也照常用 |
@@ -153,6 +153,11 @@ ollama pull qwen2.5:7b-instruct
 
 按项目聚合、按时间倒序——适合回答「那阵子我到底在干什么」。
 
+**分页单位是项目**，不是会话：项目头上的「N 个会话」是该项目在当前筛选条件下的
+真实总数，与本页展开了几条无关。顶部与底部各有一条页码，会告诉你一共多少个项目、
+现在看的是第几个。顶栏关键词与筛选条在这里同样生效（语义是「这个会话里存在满足
+条件的内容」）。
+
 ![时间线](docs/images/timeline.png)
 
 ### 会话回读
@@ -211,6 +216,16 @@ restic 只知道路径，不知道什么是会话。这一页回答那个 restic
 
 chatdex **不做 restic 的壳子**：不做定时调度、不做保留策略、不代做 restore
 （界面只给出可复制的命令）。restic 没装也不影响索引与检索，备份入口置灰并说明原因。
+
+**异地副本**：restic 仓可以再镜像一份到 S3 / R2。chatdex 会告诉你**它落后多少个快照**
+—— 这才是关键：一份不知道新旧的副本，在做决定时不能算数。
+
+配置在 `backup.mirror`；凭据放单独的 env 文件（**不进 `config.json`**，那个文件会
+下发给界面、也会进备份）。同步顺序 `config → keys → data → index → snapshots`，
+snapshots 必须最后传，跑完逐文件校验 —— **copy 退 0 不等于文件都对**。
+
+自动同步默认**关**：它要往外发数据、要凭据、要带宽，这三件事不该由默认值替你决定。
+关着也不会让你蒙在鼓里，备份页会一直报「落后 N 个快照」。
 
 ### 设置
 
@@ -272,14 +287,20 @@ chatdex **不做 restic 的壳子**：不做定时调度（那是 systemd timer 
 | 最慢查询 | 529 ms——单个 CJK 常用字「的」，命中 12.1 万块的退化情形 |
 | 摘要吞吐 | 中位 0.8 s/会话，全量 **2 小时 13 分**跑完（2026-07-29 那次的记录，未重跑） |
 
-## 两套 JSONL 格式不同（写解析器前必读）
+## 三套 JSONL 格式各不相同（写解析器前必读）
 
-| | Claude Code | Codex |
-|---|---|---|
-| 路径 | `~/.claude/projects/<slug>/<uuid>.jsonl` | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` |
-| 角色字段 | `message.role` | `payload.role`（外层 `type: response_item`） |
-| 文本字段 | `content` 为 str，或 list 中 `type=="text"` | list 中 `type=="input_text"` |
-| 子代理 | 另存 `<uuid>/subagents/agent-*.jsonl` | 同文件内 |
+| | Claude Code | Codex | Grok CLI |
+|---|---|---|---|
+| 路径 | `~/.claude/projects/<slug>/<uuid>.jsonl` | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` | `~/.grok/sessions/<百分号编码的 cwd>/<uuid>/chat_history.jsonl` |
+| 角色字段 | `message.role` | `payload.role`（外层 `type: response_item`） | 顶层 `type` |
+| 文本字段 | `content` 为 str，或 list 中 `type=="text"` | list 中 `type=="input_text"` | `content`；**思考在 `summary[].text`** |
+| 时间戳 | 每条自带 | 每条自带 | **正文里没有**，从同目录 `events.jsonl` 按 `tool_call_id` 取，其余插值 |
+| 元数据 | 散在正文里 | 首行 `session_meta` | 同目录 `summary.json` |
+| 子代理 | 另存 `<uuid>/subagents/agent-*.jsonl` | 同文件内 | 正文在项目目录顶层，父会话的 `subagents/<uuid>/` 只留 `meta.json` |
+
+⚠️ Grok 的「是不是子代理」**不能看 `summary.json` 的 `agent_name`**——
+实测它与主/子完全对应（41/41、30/30），但那是语料的巧合：它的语义是
+「哪个 agent 配置在跑」。判据要用结构事实（见 architecture 决策 40）。
 
 解析器可插拔——在 `internal/parser` 里实现 `Parser` 接口即可，索引与检索都不用碰。
 

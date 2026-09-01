@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -391,6 +392,47 @@ func TestReaderRelationsAreLazyAndLabelFree(t *testing.T) {
 	_ = i
 	if !strings.Contains(src, "child_count") {
 		t.Error("没有用 child_count 决定是否显示入口 —— 会出现「0 个子代理」的空块")
+	}
+}
+
+// 时间线的日期过滤落点与 reader 的完整分页都必须留在同一条 seq 深链接上。
+// 这是结构守卫：真实点击、刷新与窄屏行为仍由浏览器验收，不能拿本测试冒充。
+func TestReaderPagerKeepsDateTargetAndDeepLink(t *testing.T) {
+	e := start(t)
+	timeline := fetchText(t, e.uiPort, "/views/timeline.js")
+	for _, want := range []string{"s.target_seq", "data-seq", "CD.openSession(+el.dataset.id, +el.dataset.seq)"} {
+		if !strings.Contains(timeline, want) {
+			t.Errorf("timeline 没有把日期 target_seq 传给回读：缺 %q", want)
+		}
+	}
+
+	reader := fetchText(t, e.uiPort, "/views/reader.js")
+	for _, want := range []string{
+		`id="rd-first"`, `id="rd-prev"`, `id="rd-page"`, `type="number"`,
+		`for="rd-page"`, `id="rd-next"`, `id="rd-last"`, `function goPage(value)`,
+	} {
+		if !strings.Contains(reader, want) {
+			t.Errorf("reader 完整分页缺少 %q", want)
+		}
+	}
+
+	start := strings.Index(reader, "function goPage(value)")
+	if start < 0 {
+		t.Fatal("找不到集中式 goPage")
+	}
+	body := reader[start:]
+	if end := strings.Index(body, "\n  /* ----------------"); end > 0 {
+		body = body[:end]
+	}
+	for _, want := range []string{"Math.max(1", "Math.min(pageCount", "replace: true", "id: cur.id", "seq: cur.target"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("goPage 缺少 clamp 或 seq URL 同步：%q", want)
+		}
+	}
+	for _, old := range []string{"cur.from -= PAGE", "cur.from += PAGE"} {
+		if strings.Contains(reader, old) {
+			t.Errorf("reader 仍有绕过 goPage 的旧分页路径：%q", old)
+		}
 	}
 }
 
@@ -882,5 +924,335 @@ func TestSuggestDoesNotWalkTheFilesystem(t *testing.T) {
 	// 因为这个文件根本没做任何文件系统操作而通过。
 	if !strings.Contains(src, "os.Stat") {
 		t.Error("known.go 里没有 os.Stat —— 那它是怎么判断路径存不存在的？断言的前提不成立")
+	}
+}
+
+// 注册型接口的每个成员，都要有证据证明它**有调用点**。
+//
+// `unmount` 在 views/progress.js 与 views/backup.js 里写得一丝不苟——清定时器、
+// 置空 root——而 `boot.js` 里 `unmount` 出现 **0 次**。代价不是抽象的「资源没释放」：
+// progress 的 setInterval 永不停，而它写的 root 就是所有视图共用的 #view，于是
+// 离开进度页之后，它每 10 秒把使用者正在看的页面就地覆写成进度页（实测：在问一问
+// 输入 12 秒后，URL 与左栏仍是 chat，输入框连同打的字一起消失）。
+//
+// 读代码的人看到 `unmount()` 就会认为资源被收了，于是不再怀疑这条路径——
+// **缺席的不是代码，是调用，而调用的缺席在阅读时完全不可见**。
+// 同族于「写了门控却等于没等」，但更进一步：那条是门控没起作用，这条是根本没接上电。
+func TestEveryRegisteredUnmountIsCalled(t *testing.T) {
+	views, err := filepath.Glob(filepath.Join("..", "..", "internal/dashboard/static/views/*.js"))
+	if err != nil || len(views) == 0 {
+		t.Fatalf("列 views/*.js 失败：err=%v 个数=%d", err, len(views))
+	}
+	var declared []string
+	for _, p := range views {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatalf("读 %s: %v", p, err)
+		}
+		if strings.Contains(string(b), "unmount(") {
+			declared = append(declared, filepath.Base(p))
+		}
+	}
+	// 阳性对照：一个都没扫到就说明取样坏了（改了目录/改了写法），
+	// 而不是「大家都没注册 unmount」——那两件事在这里同形。
+	if len(declared) == 0 {
+		t.Fatal("没有任何视图定义 unmount —— 先怀疑这条断言的取样，不是结论")
+	}
+
+	boot := readRepoFile(t, "internal/dashboard/static/boot.js")
+	i := strings.Index(boot, "CD.mountView = ")
+	if i < 0 {
+		t.Fatal("找不到 CD.mountView")
+	}
+	body := boot[i:]
+	if end := strings.Index(body, "\n};"); end > 0 {
+		body = body[:end]
+	}
+	// **先剥掉注释再匹配。** mountView 里有一句说明写着「不加 `CD.view !== name` 短路」，
+	// 连注释一起扫的话，这条断言会匹到它自己 —— 干净代码也红，而在变异扫描里
+	// 「本来就红」与「被变异咬到」同形，于是每条变异都记成「咬」。本项目已栽三次。
+	body = stripJSLineComments(body)
+	// 阳性对照：剥完不能把代码也剥没了。
+	if !strings.Contains(body, "CD.mountView") {
+		t.Fatal("剥注释后连函数头都没了 —— 先怀疑 stripJSLineComments，不是结论")
+	}
+	call := strings.Index(body, ".unmount()")
+	mount := strings.Index(body, "].mount(")
+	if call < 0 {
+		t.Errorf("mountView 里没有 unmount 调用点，而这些视图注册了它：%v", declared)
+	}
+	if mount < 0 {
+		t.Fatal("mountView 里找不到挂载新视图的调用")
+	}
+	if call > mount {
+		t.Error("先挂新视图才收旧的 —— 旧视图的定时器会活到新视图身上")
+	}
+	// 收的必须是**离开的那个**视图。写成 CD.views[name] 就是去 unmount 刚要挂的
+	// 那一个：旧视图的定时器一个都没收，而代码读起来一模一样。
+	if !strings.Contains(body, "CD.views[CD.view]") {
+		t.Error("mountView 收的不是离开的那个视图（应取 CD.views[CD.view]）—— 旧视图的定时器不会被清")
+	}
+	// **同名不得短路。** 重挂同一个视图（popstate、再点一次同一个 tab）同样会
+	// 新起一个定时器，跳过收尾就是又泄漏一个 —— 现状里泄漏会累积正是这么来的。
+	if strings.Contains(body, "CD.view !== name") {
+		t.Error("mountView 对同名视图短路了收尾 —— 重挂同一视图时定时器会叠加")
+	}
+}
+
+// URL 参数归属只能有一处定义。
+//
+// 同一份知识曾经散在三处：href() 的全量序列化、筛选条可见性的
+// ['search','timeline','digest']、顶栏提交的 ['chat','settings']。三处必然漂移——
+// 而它们确实已经漂移了：progress/backup 不在第三份清单里，于是在那两页按回车
+// 搜索**什么都不会发生**，没有任何报错。
+func TestUrlParamOwnershipHasOneSource(t *testing.T) {
+	boot := readRepoFile(t, "internal/dashboard/static/boot.js")
+
+	// 两份硬编码清单不得再出现（允许空格差异，故用正则）
+	for _, re := range []*regexp.Regexp{
+		regexp.MustCompile(`\[\s*'search'\s*,\s*'timeline'\s*,\s*'digest'\s*\]`),
+		regexp.MustCompile(`'chat'\s*\|\|\s*CD\.view\s*===\s*'settings'`),
+	} {
+		if re.MatchString(boot) {
+			t.Errorf("boot.js 里仍有硬编码的视图名清单 %s —— 归属关系应只在 VIEW_PARAMS 里", re)
+		}
+	}
+
+	// VIEW_PARAMS 必须覆盖 NAV 里的每一个视图：漏一个，那个视图的 URL 就恒为空，
+	// 而 paramsOf 的空表兜底让这件事不报错、只是安静地丢参数。
+	tbl := between(t, boot, "const VIEW_PARAMS = {", "\n};")
+	nav := between(t, boot, "const NAV = [", "\n];")
+	ids := regexp.MustCompile(`\{ id: '([a-z]+)'`).FindAllStringSubmatch(nav, -1)
+	if len(ids) == 0 {
+		t.Fatal("从 NAV 里一个视图名都没解析出来 —— 先怀疑取样")
+	}
+	for _, m := range ids {
+		if !regexp.MustCompile(`(?m)^\s*` + m[1] + `:`).MatchString(tbl) {
+			t.Errorf("视图 %q 在 NAV 里但不在 VIEW_PARAMS 里 —— 它的 URL 会恒为空且不报错", m[1])
+		}
+	}
+}
+
+// between 取 from 与其后第一个 to 之间的片段。取样失败当场 Fatal，
+// 不返回空串——空串会让上面的断言「全部通过」，那正是假绿。
+func between(t *testing.T, s, from, to string) string {
+	t.Helper()
+	i := strings.Index(s, from)
+	if i < 0 {
+		t.Fatalf("取样失败：找不到 %q", from)
+	}
+	rest := s[i+len(from):]
+	j := strings.Index(rest, to)
+	if j < 0 {
+		t.Fatalf("取样失败：%q 之后找不到 %q", from, to)
+	}
+	return rest[:j]
+}
+
+// stripJSLineComments 去掉 JS 里的 `//` 行注释，只留代码。
+//
+// 存在的理由很具体：本仓的注释写得很详细，经常**逐字引用它旁边的代码**
+// （「不加 `CD.view !== name` 短路」）。对代码做文本断言时若不剥注释，
+// 断言会匹到自己的说明文字 —— 干净代码也红，而在变异扫描里「本来就红」
+// 与「被变异咬到」在输出上同形。
+//
+// 只处理行注释：本仓 JS 的块注释都是文件/函数头，不会与被断言的代码同行。
+func stripJSLineComments(s string) string {
+	var b strings.Builder
+	for _, line := range strings.Split(s, "\n") {
+		if i := strings.Index(line, "//"); i >= 0 {
+			line = line[:i]
+		}
+		b.WriteString(line)
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+// 起了定时器/订阅的视图，必须注册 unmount。
+//
+// 这条守的是 TestEveryRegisteredUnmountIsCalled **反过来的那一半**：
+// 那条验「定义了的会被调用」，扫的是含 `unmount(` 的文件；一个起了
+// setInterval 却**根本没写 unmount** 的新视图压根不会进它的名单，
+// 于是它照常绿，而 R18 修的那个 bug 原封不动地回来——离开的视图每隔几秒
+// 把使用者正在看的页面覆写一次，URL 与左栏都毫无异样。
+//
+// 判据取「拿了需要还的资源」而不是「代码里有定时器」：一次性的 setTimeout
+// 不入列（它自己会结束），能反复触发或长期挂着的才入列。
+func TestViewsThatAcquireResourcesRegisterUnmount(t *testing.T) {
+	// 反复触发 / 长期挂着 = 离开视图后仍会动的东西
+	needsCleanup := regexp.MustCompile(
+		`setInterval\(|window\.addEventListener\(|document\.addEventListener\(|` +
+			`new (?:MutationObserver|IntersectionObserver|ResizeObserver|EventSource|WebSocket)\(`)
+
+	views, err := filepath.Glob(filepath.Join("..", "..", "internal/dashboard/static/views/*.js"))
+	if err != nil || len(views) == 0 {
+		t.Fatalf("列 views/*.js 失败：err=%v 个数=%d", err, len(views))
+	}
+	var acquiring []string
+	for _, p := range views {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatalf("读 %s: %v", p, err)
+		}
+		src := stripJSLineComments(string(b))
+		if !needsCleanup.MatchString(src) {
+			continue
+		}
+		acquiring = append(acquiring, filepath.Base(p))
+		if !strings.Contains(src, "unmount(") {
+			t.Errorf("views/%s 起了定时器/订阅却没注册 unmount —— "+
+				"离开这个视图后它还会继续动，而 URL 与左栏看不出任何异样", filepath.Base(p))
+		}
+	}
+	// 阳性对照：progress.js 有 setInterval，必须被这条规则**认出来**。
+	// 认不出就说明正则坏了（改了写法/换了 API），而那种情况下上面的循环
+	// 一个文件都不检查，测试照样全绿 —— 那正是这条断言最该拦住的假绿。
+	if !slices.Contains(acquiring, "progress.js") {
+		t.Fatalf("阳性对照失败：progress.js 起了 setInterval 却没被认出来，"+
+			"当前认出的是 %v —— 先怀疑这条正则，不是结论", acquiring)
+	}
+}
+
+// parseQuery 解析出的每个查询参数，在时间线那里要么被用、要么被**显式声明不支持**。
+//
+// 「解析了但没用」是第三种状态，而它在界面上与「用了但恰好没筛掉东西」完全同形：
+// 实测过——时间线上选 kind=summary，下拉变了、URL 变了、列表重载了，四个正反馈
+// 齐全，而返回的响应与不加筛选**逐字节相同**。q / kind / tool 三条就这样被
+// 静默忽略了一个月，没人报过，因为界面从不说「这个条件我不认」。
+//
+// 判据是「字段名出现在 sessionFilters 的函数体里」。共用的会话级条件走
+// sessionScopeFilters，所以两个函数体都要看。
+func TestTimelineUsesEveryParsedQueryField(t *testing.T) {
+	// 时间线**显式声明不支持**的字段，连同理由。空表也是合法的——
+	// 但每一条都得在这里写下来，不能靠「没实现」默认跳过。
+	unsupported := map[string]string{
+		"Limit":  "分页参数，不是过滤条件",
+		"Offset": "分页参数，不是过滤条件",
+	}
+
+	decl := readRepoFile(t, "internal/search/engine.go")
+	body := between(t, decl, "type Query struct {", "\n}")
+	var fields []string
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimSpace(stripGoLineComments(line))
+		if line == "" {
+			continue
+		}
+		if name, _, ok := strings.Cut(line, " "); ok && name != "" {
+			fields = append(fields, name)
+		}
+	}
+	// 阳性对照：一个字段都没解析出来说明取样坏了，而不是「Query 是空结构体」
+	if len(fields) < 5 {
+		t.Fatalf("从 Query 里只解析出 %v —— 先怀疑取样，不是结论", fields)
+	}
+
+	tl := readRepoFile(t, "internal/search/timeline.go")
+	used := stripGoLineComments(between(t, tl, "func (q Query) sessionFilters()", "\n}\n")) +
+		stripGoLineComments(between(t, decl, "func (q Query) sessionScopeFilters()", "\n}\n"))
+
+	// 过滤链把一部分条件**委托**给了辅助函数，字段名只出现在那些函数体里
+	// （agent 就是这样：sessionScopeFilters 里只有一句 q.agentFilter()）。
+	// 所以要把它们的函数体也算进「用了」。
+	//
+	// 但这张表本身会过期，所以每一条都先断言它**确实被调用**——否则删掉一个
+	// 委托调用之后，这张表会继续替那个字段作证，把断言变成永远为真。
+	both := decl + tl
+	for _, d := range []string{"agentFilter", "blockTimeFilter"} {
+		if !strings.Contains(used, d+"(") {
+			t.Fatalf("过滤链里已经不再调用 %s()，这张委托表过期了 —— 先修表，不是加字段", d)
+		}
+		used += stripGoLineComments(between(t, both, "func (q Query) "+d+"(", "\n}\n"))
+	}
+
+	for _, f := range fields {
+		if _, ok := unsupported[f]; ok {
+			continue
+		}
+		if !strings.Contains(used, "q."+f) {
+			t.Errorf("Query.%s 被 parseQuery 解析、被 Timeline 收到，却没有任何一处过滤用它 —— "+
+				"要么用它，要么写进本测试的 unsupported 表说明为什么不支持。"+
+				"「解析了但没用」在界面上与「用了但没筛掉东西」同形", f)
+		}
+	}
+}
+
+// stripGoLineComments 去掉 Go 的 `//` 行注释。
+//
+// 与 stripJSLineComments 同一个理由，且这里更要紧：sessionFilters 的文档注释里
+// 逐字写着 `q` / `kind` / `tool` 这些字段名，不剥就会让上面那条断言匣到注释、
+// 于是**无论实现有没有用它们都通过**。R18 已经因为同一个机制吃过一次假绿。
+func stripGoLineComments(s string) string {
+	var b strings.Builder
+	for _, line := range strings.Split(s, "\n") {
+		if i := strings.Index(line, "//"); i >= 0 {
+			line = line[:i]
+		}
+		b.WriteString(line)
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+// 「源已消失的会话还救不救得回来」必须跨全部快照判定，不得退回只看最新快照。
+//
+// 退回去的代价不是「少算一点」：消失的文件**按定义**就不在最新快照里，
+// 所以那一类会 100% 被判成永久丢失。实测真机 1973 个「永久丢失」里，
+// 随机 29 个样本有 25 个（86%）在旧快照里找得到；改成跨快照后
+// rescued_total 从 0 变成 1639。
+//
+// 这条断言守两件事：①判 rescued 用的是跨快照的 seen，不是 inLatest；
+// ②alive 那一支**仍然**用 inLatest（两种口径都在，不是把其中一种删了了事）。
+func TestCoverageJudgesVanishedAcrossAllSnapshots(t *testing.T) {
+	src := readRepoFile(t, "internal/backup/coverage.go")
+	body := stripGoLineComments(between(t, src, "func (r *Runner) Coverage(", "\n}\n"))
+
+	// 阳性对照：取样得真的取到函数体
+	if !strings.Contains(body, "RescuedTotal++") {
+		t.Fatal("Coverage 函数体里找不到 RescuedTotal++ —— 先怀疑取样，不是结论")
+	}
+	if !strings.Contains(body, "seenInAny") {
+		t.Error("Coverage 不再接受跨快照查询 —— 消失的会话必然全被判成永久丢失")
+	}
+
+	rescued := strings.Index(body, "RescuedTotal++")
+	seenCase := strings.LastIndex(body[:rescued], "case seen[")
+	latestCase := strings.LastIndex(body[:rescued], "inLatest[")
+	if seenCase < 0 {
+		t.Error("rescued 不是由跨快照的 seen 判定的 —— 只看最新快照的话它恒为 0")
+	}
+	if latestCase > seenCase {
+		t.Error("rescued 的判定用到了 inLatest —— 消失的文件不在最新快照里，这样判恒为假")
+	}
+	// alive 那一支必须仍然比最新快照：曾经备过不代表当前内容被备过
+	if !strings.Contains(body, "inLatest[s.Path]") {
+		t.Error("alive 会话不再比最新快照 —— 「我现在受保护吗」答不出来了")
+	}
+	// 索引没建完就不许给「永久丢失」这个结论
+	if !strings.Contains(body, "cov.LostTotal = 0") {
+		t.Error("索引未就绪时没有扣住 LostTotal —— 「还没查完」与「查过了没有」在数字上同形")
+	}
+}
+
+// 两处提示词模板里的字数要求必须一致。
+//
+// `tmplSingle`（单段）与 `tmplReduce`（分段汇总）各写了一行「一句话，不超过 N 字」。
+// 同一条要求写两遍，早晚有一边改了另一边没改 —— 而表现是「短会话的摘要守规矩、
+// 长会话的不守」这种没人会立刻归因的偏差。
+func TestSummaryLengthRequirementIsConsistent(t *testing.T) {
+	src := stripGoLineComments(readRepoFile(t, "internal/summary/prompt.go"))
+	re := regexp.MustCompile(`一句话，不超过 (\d+) 字`)
+	m := re.FindAllStringSubmatch(src, -1)
+	// 阳性对照：一条都没匹配到说明措辞改了，取样坏了，而不是「没有这条要求」
+	if len(m) < 2 {
+		t.Fatalf("只匹配到 %d 处字数要求 —— 先怀疑这条正则，不是结论", len(m))
+	}
+	first := m[0][1]
+	for _, hit := range m[1:] {
+		if hit[1] != first {
+			t.Errorf("两处提示词的字数要求不一致：%s 与 %s —— 同一条规则只能有一个数",
+				first, hit[1])
+		}
 	}
 }

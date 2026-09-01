@@ -178,18 +178,28 @@ func TestFieldsCoverEveryConfigKey(t *testing.T) {
 			t.Errorf("%s 的 label/help/group 不完整", f.Key)
 		}
 	}
-	// 反向：Config 的字段数应与元信息条数一致
-	var n int
-	raw, _ := json.Marshal(c)
-	var m map[string]any
-	json.Unmarshal(raw, &m)
-	for _, v := range m {
-		if sub, ok := v.(map[string]any); ok {
-			n += len(sub)
-		} else {
-			n++
+	// 反向：Config 的字段数应与元信息条数一致。
+	//
+	// **递归下钻**：早先这里只下一层，于是 backup.mirror 这种三级配置会被
+	// 整个算成 1 个字段——四个子项漏了三个也照样绿。而这条断言存在的理由
+	// 恰恰是「漏一个，界面上就少一格，而少的那一格不会有任何东西报错」。
+	// 数组不下钻（backup.sources 是一整项，不是若干项）。
+	var count func(any) int
+	count = func(v any) int {
+		sub, ok := v.(map[string]any)
+		if !ok {
+			return 1
 		}
+		n := 0
+		for _, x := range sub {
+			n += count(x)
+		}
+		return n
 	}
+	var m map[string]any
+	raw, _ := json.Marshal(c)
+	json.Unmarshal(raw, &m)
+	n := count(m)
 	if n != len(Fields()) {
 		t.Errorf("Config 有 %d 个可配置字段，但元信息只声明了 %d 个——新增配置项时忘了同步 meta.go", n, len(Fields()))
 	}
@@ -237,5 +247,49 @@ func TestSaveHandlesNonComparableValues(t *testing.T) {
 		if _, has := sec["sources"]; has {
 			t.Errorf("默认值不该被写进配置：%s", raw2)
 		}
+	}
+}
+
+// 三级配置键存盘后必须还读得回来。
+//
+// 🔴 早先 diffFromDefault 用 SplitN(key, ".", 2) 只切一刀，于是
+// backup.mirror.repo 被写成 `backup: {"mirror.repo": …}` —— 一个带点的字面键，
+// Load 反序列化到结构体时认不出。表现是**存一次设置，异地配置就没了**，
+// 而保存返回 200、界面显示成功、日志干净。
+//
+// 这条断言的判据是「存了再读回来还在」，不是「存的时候没报错」。
+func TestNestedConfigKeysSurviveSaveAndLoad(t *testing.T) {
+	c := Default()
+	c.Backup.Mirror.Repo = "s3:https://acc.example.com/bucket/prefix"
+	c.Backup.Mirror.EnvFile = "/tmp/creds.env"
+	c.Backup.Mirror.AfterBackup = true
+	c.Backup.Repo = "/tmp/repo"
+	c.Backup.PasswordFile = "/tmp/pass"
+
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := Save(path, c); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Backup.Mirror.Repo != c.Backup.Mirror.Repo {
+		t.Errorf("mirror.repo 存盘后丢了：%q", got.Backup.Mirror.Repo)
+	}
+	if got.Backup.Mirror.EnvFile != c.Backup.Mirror.EnvFile {
+		t.Errorf("mirror.env_file 存盘后丢了：%q", got.Backup.Mirror.EnvFile)
+	}
+	if !got.Backup.Mirror.AfterBackup {
+		t.Error("mirror.after_backup 存盘后丢了")
+	}
+	// 对照：同层的两级键本来就是好的，确保没被这次改动弄坏
+	if got.Backup.Repo != c.Backup.Repo || got.Backup.PasswordFile != c.Backup.PasswordFile {
+		t.Error("两级键反而坏了")
+	}
+	// 落盘的 JSON 里不该出现带点的字面键
+	raw, _ := os.ReadFile(path)
+	if strings.Contains(string(raw), `"mirror.`) {
+		t.Errorf("配置文件里出现了带点的字面键，Load 认不出它：\n%s", raw)
 	}
 }

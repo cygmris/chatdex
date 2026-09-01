@@ -83,6 +83,25 @@ CREATE TABLE IF NOT EXISTS summary_queue (
     updated_at INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS summary_queue_pick ON summary_queue(state, priority, session_id);
+
+-- backup_seen / backup_scanned：「这个文件曾经出现在任一快照里吗」的并集索引。
+--
+-- 存在的理由：覆盖率此前只跟**最新一个快照**比，而源文件已消失的会话按定义
+-- 就不在最新快照里 —— 它只活在旧快照。于是「还救得回来」恒为 0、「永久丢失」
+-- 恒等于全部消失的会话数。实测 1973 个「永久丢失」里随机 29 个样本有 25 个
+-- （86%）在旧快照里找得到。
+--
+-- 为什么要缓存而不是每次现查：实测单个快照 restic ls 约 1 秒 / 7000 个文件，
+-- 当前 566 个快照 —— 全扫 9.4 分钟，不可能放在请求路径上。
+--
+-- **这是派生数据**：整表删掉能重建，与「索引库 index.db 不进备份源」同一条纪律。
+CREATE TABLE IF NOT EXISTS backup_seen (
+    path TEXT PRIMARY KEY
+);
+CREATE TABLE IF NOT EXISTS backup_scanned (
+    snapshot_id TEXT PRIMARY KEY,
+    scanned_at  INTEGER NOT NULL
+);
 `
 
 // migrations 是建表之后要补的增量结构变更。

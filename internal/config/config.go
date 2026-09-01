@@ -71,6 +71,32 @@ type Backup struct {
 	// AfterScan：每轮增量扫描之后顺手备一次。
 	// 实测无变化时 restic 只要 767 ms 且仓库零增长，所以这个开关很便宜。
 	AfterScan bool `json:"after_scan"`
+	// Mirror 是异地副本（S3/R2 等）的配置；Repo 为空 = 没有异地副本。
+	Mirror Mirror `json:"mirror"`
+}
+
+// Mirror 是异地副本的配置。
+//
+// **本地仓是主，异地是它的镜像**，不是把 restic 仓直接放在对象存储上。
+// 依据是实测而非偏好：R20 的全快照索引要对每个快照跑一次 restic ls，
+// 实测本地 1.06s / R2 3.91s（3.7 倍），689 个快照下是 12 分钟 vs 45 分钟，
+// 而快照每 30 分钟涨一个——主仓放远端会让整个产品最慢的一环再慢一倍不止。
+type Mirror struct {
+	// Repo 是异地 restic 仓地址，如
+	// s3:https://<account>.r2.cloudflarestorage.com/<bucket>/<prefix>。
+	// 空 = 没有异地副本（与「有但落后 0」是两回事，界面上必须分开显示）。
+	Repo string `json:"repo"`
+	// EnvFile 是一个 KEY=VALUE 文件，用来传 AWS_ACCESS_KEY_ID /
+	// AWS_SECRET_ACCESS_KEY。
+	//
+	// 🔴 **凭据不进 config.json**：这个文件本身会被 /api/config 读出来给界面，
+	// 也会进备份。密钥写在这里等于把它交给所有能看到配置的人。
+	// 与 PasswordFile 用文件而不用环境变量是同一条纪律的延伸。
+	EnvFile string `json:"env_file"`
+	// AfterBackup：每次备份完成后顺手同步一次。
+	AfterBackup bool `json:"after_backup"`
+	// RclonePath 空 = 从 PATH 找。理由同 ResticPath。
+	RclonePath string `json:"rclone_path"`
 }
 
 type BackupSource struct {

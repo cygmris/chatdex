@@ -16,6 +16,7 @@
   let last = null;    // 本次会话里最后一次手动备份的结果
   let sugg = null;    // /api/backup/suggest，随页面一起拉（只做 os.Stat，实测 0.25 ms）
   let busy = '';
+  let syncMsg = '';
 
   async function load() {
     if (!root) return;
@@ -62,7 +63,50 @@
       ${!st.repo || !st.version
         ? '<p class="hint">去<a href="?view=settings">设置</a>里填仓库路径、密码文件与 restic 路径。</p>'
         : ''}
+      ${mirrorBlock()}
     </section>`;
+  }
+
+  /* 异地副本。
+   *
+   * 🔴 **「没有异地副本」与「有且是最新的」必须显示成两种东西。**
+   * 两者的 behind 都是 0，而含义相反：前者是「机器没了就全没了」，
+   * 后者是「你受保护」。只看数字分不出来——这与决策 37（不交代范围的结论）同族。
+   *
+   * 落后判定在后端（behind），前端不自己拿快照数相减：同一条规则只能有一处（R13）。
+   */
+  function mirrorBlock() {
+    const m = st.mirror;
+    if (!m) return '';
+
+    if (!m.configured) {
+      return `<div class="bk-stale">
+        <strong>没有异地副本</strong> —— 备份只在这台机器上。
+        <br>盘坏了能救，<strong>机器整台没了就全没了</strong>。
+        去<a href="?view=settings">设置</a>里填一个异地仓（S3 / R2 等）。
+      </div>`;
+    }
+    if (m.err) {
+      // 连不上要说是连不上，不能显示成「落后 0」——
+      // 「查不到」与「查过了，是齐的」在数字上同形。
+      return `<div class="bk-stale">
+        <strong>异地副本状态取不到</strong>：${CD.esc(m.err)}
+        <br>在排除这个错误之前，<strong>不要假定异地那份是新的</strong>。
+      </div>`;
+    }
+    const when = m.last_sync ? CD.fmtTime(m.last_sync) : '从没同步过';
+    if (!m.behind) {
+      return `<p class="hint">异地副本：<span class="ok-inline">已是最新</span>
+        · ${m.snapshots} 个快照 · 最近一个 ${when}</p>`;
+    }
+    return `<div class="bk-stale">
+      <strong>异地副本落后 ${m.behind} 个快照</strong>（异地 ${m.snapshots} 个，最近一个 ${when}）。
+      <br>这 ${m.behind} 个快照<strong>只存在于这台机器上</strong>——
+      机器没了，它们里面的会话就没了。
+      <br><button id="bk-sync" class="sm" type="button" ${busy === 'sync' ? 'disabled' : ''}>${
+        busy === 'sync' ? '同步中…' : '立即同步到异地'}</button>
+      ${syncMsg ? `<br><span class="restore">${CD.esc(syncMsg)}</span>` : ''}
+    </div>`;
   }
 
   function actionCard() {
@@ -113,7 +157,10 @@
     return `<section class="bk-card">
       <h2>覆盖率</h2>
       <p class="hint">restic 只知道路径，不知道什么是会话。这里把索引里的每个会话
-        与最新快照对一遍，回答那个 restic 答不出的问题。</p>
+        与备份对一遍，回答那个 restic 答不出的问题。<br>
+        <strong>源还在</strong>的会话比<strong>最新快照</strong>（问的是「我现在受保护吗」）；
+        <strong>源已消失</strong>的比<strong>全部历史快照</strong>（问的是「还救得回来吗」）
+        —— 消失的文件按定义就不在最新快照里，只看它必然报「救不回来」。</p>
       <p><button id="bk-cov" class="sm" type="button" ${busy === 'cov' ? 'disabled' : ''}>${
         busy === 'cov' ? '核对中…' : (cov ? '重新核对' : '核对一遍')}</button></p>
       ${cov ? covResult() : ''}
@@ -122,7 +169,7 @@
 
   /* 覆盖率是拿哪一刻的快照算的 —— 不说清楚，下面那四个数就会骗人。
    *
-   * 覆盖率永远拿「最新快照」比对，而「最新」可能是一周前：那之后新建的
+   * 「已覆盖」拿「最新快照」比对，而「最新」可能是一周前：那之后新建的
    * 会话既不在「已覆盖」也不在「未覆盖」，它们压根不在比对基准里，
    * 而界面上一片安好。实测撞到过——快照停在 08-10，页面在 08-17
    * 仍然报「已覆盖 3082」。
@@ -145,21 +192,43 @@
     </div>`;
   }
 
+  /* 全快照索引的进度。
+   *
+   * 「还没查完」与「查过了，确实没有」在数字上完全同形 —— 索引没建完时，
+   * 「没找到」只意味着「还没在已扫的那部分里找到」。所以这一段不是进度条摆设，
+   * 它决定了下面那个「永久丢失」到底给不给。
+   *
+   * 判定在后端（seen_ready），前端不自己拿 scanned/total 比 —— 阈值只能有一处（R13）。
+   */
+  function seenBasis() {
+    if (cov.seen_ready || !cov.seen_total) return '';
+    const pct = Math.floor((cov.seen_scanned / cov.seen_total) * 100);
+    return `<div class="bk-stale">
+      <strong>还在建立「历史快照」索引（${cov.seen_scanned} / ${cov.seen_total}，${pct}%）</strong>
+      <br>源文件已经消失的会话，只可能存在于<strong>旧快照</strong>里。索引建完之前，
+      「找不到」只说明还没扫到，所以下面<strong>暂不显示「永久丢失」</strong>——
+      那个数现在给出来必然是虚高的。
+      <br>索引在后台自己跑，扫完会自动更新，不用管它。
+    </div>`;
+  }
+
   function covResult() {
     if (cov.error) return `<p class="err">核对失败：${CD.esc(cov.error)}</p>`;
     // 「没备但源还在」与「没备且源已没」是两件天差地别的事：前者去勾上就好，
     // 后者是永久丢失。只报一个「未覆盖」会把后者说成前者。
     const stillThere = cov.missing_total - cov.lost_total;
-    return `${covBasis()}
+    const ready = cov.seen_ready;
+    return `${covBasis()}${seenBasis()}
     <div class="bk-cov">
       ${covNum('已覆盖', cov.covered_total, 'ok')}
       ${covNum('没备（源还在）', stillThere, stillThere ? 'warn' : '')}
-      ${covNum('永久丢失', cov.lost_total, cov.lost_total ? 'bad' : '')}
+      ${ready ? covNum('永久丢失', cov.lost_total, cov.lost_total ? 'bad' : '')
+              : covNum('永久丢失', '—', '')}
       ${covNum('源没了但备份里有', cov.rescued_total, cov.rescued_total ? 'ok' : '')}
     </div>
     ${stillThere ? '<p class="hint">「源还在」的那些去设置里把对应目录勾上，下次备份就带上了。</p>' : ''}
-    ${cov.lost_total ? `<p class="hint">「永久丢失」= 源文件没了、备份里也没有。备份救不回
-      已经消失的东西，只能从配好之后开始保护。</p>` : ''}
+    ${ready && cov.lost_total ? `<p class="hint">「永久丢失」= 源文件没了、<strong>任何快照里也没有</strong>。
+      备份救不回已经消失的东西，只能从配好之后开始保护。</p>` : ''}
     ${cov.rescued_total ? `<p class="hint">「源没了但备份里有」的会话，在回读页可以直接
       <strong>从备份读原件</strong>。</p>` : ''}
     ${listOf('没备的', cov.missing)}${listOf('可从备份读回的', cov.rescued)}`;
@@ -261,6 +330,19 @@
   function bind() {
     const init = CD.$('bk-init');
     if (init) init.onclick = () => act('init', () => CD.api('/api/backup/init', { method: 'POST' }));
+
+    const sync = CD.$('bk-sync');
+    if (sync) sync.onclick = () => act('sync', async () => {
+      try {
+        const r = await CD.api('/api/backup/mirror/sync', { method: 'POST' });
+        // 判据是「校验通过」，不是「请求成功」——copy 退 0 不等于文件都对
+        syncMsg = r.verified
+          ? `已同步并逐文件校验通过：${r.checked} 个文件 · ${r.seconds.toFixed(1)}s`
+          : `同步完成但校验未通过 —— 不要当成已备份`;
+      } catch (e) {
+        syncMsg = '同步失败：' + e.message;
+      }
+    });
 
     const run = CD.$('bk-run');
     if (run) run.onclick = () => act('run', async () => {

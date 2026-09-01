@@ -131,7 +131,7 @@ func unslug(slug string) string {
 	return strings.ReplaceAll(slug, "-", "/")
 }
 
-func (c Claude) Parse(r io.Reader, start Cursor, emit func(model.Block) error) (Cursor, error) {
+func (c Claude) Parse(r io.Reader, _ string, start Cursor, emit func(model.Block) error) (Cursor, error) {
 	cur := start
 	toolNames := map[string]string{} // tool_use_id -> 工具名，供 tool_result 回填
 	// 续读时首条 user 消息早已处理过，不能再走兜底截断路径

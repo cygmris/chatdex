@@ -59,6 +59,9 @@
 
     const hasPrev = cur.from > 0;
     const hasNext = cur.from + PAGE < cur.total;
+    const pageCount = Math.max(1, Math.ceil(cur.total / PAGE));
+    const currentPage = Math.min(pageCount, Math.floor(cur.from / PAGE) + 1);
+    const rangeStart = cur.total ? cur.from + 1 : 0;
 
     root.innerHTML = `
       <div class="reader-head">
@@ -70,7 +73,8 @@
           <div class="muted">${CD.fmtRange(v.started_at, v.ended_at)} · ${v.total} 条 ·
             ${v.source === 'codex' ? 'Codex' : 'Claude'}${v.is_sub ? ' · 子代理' : ''}
             ${v.alive ? '' : ' · <span class="err-inline">原始文件已不存在</span>'}
-            ${cur.archived ? ' · <span class="ok-inline">正在看备份里的原件</span>' : ''}</div>
+            ${cur.archived ? ` · <span class="ok-inline">正在看原件（${
+              v.origin === 'disk' ? '源文件' : '备份'}）</span>` : ''}</div>
           ${archivedBar(v)}
           ${v.title ? `<div class="reader-title">${CD.esc(v.title)}</div>` : ''}
           ${v.summary ? `<div class="reader-sum">${CD.esc(v.summary)}</div>` : ''}
@@ -79,25 +83,42 @@
         </div>
       </div>
       <div class="msgs">${(v.messages || []).map(msg).join('') || '<p class="hint">这一页没有内容。</p>'}</div>
-      <div class="pager">
-        ${hasPrev ? '<button id="rd-prev" class="ghost sm" type="button">上一页</button>' : ''}
-        <span>${cur.from + 1}–${Math.min(cur.from + PAGE, cur.total)} / ${cur.total}</span>
-        ${hasNext ? '<button id="rd-next" class="ghost sm" type="button">下一页</button>' : ''}
+      <div class="pager reader-pager">
+        <button id="rd-first" class="ghost sm" type="button"${hasPrev ? '' : ' disabled'}>首页</button>
+        <button id="rd-prev" class="ghost sm" type="button"${hasPrev ? '' : ' disabled'}>上一页</button>
+        <form id="rd-page-form" class="reader-page-form" novalidate>
+          <label for="rd-page">第</label>
+          <input id="rd-page" class="reader-page-input" type="number" inputmode="numeric"
+            min="1" max="${pageCount}" value="${currentPage}">
+          <span>/ ${pageCount} 页</span>
+          <button class="ghost sm" type="submit">跳转</button>
+        </form>
+        <span class="reader-range">${rangeStart}–${Math.min(cur.from + PAGE, cur.total)} / ${cur.total}</span>
+        <button id="rd-next" class="ghost sm" type="button"${hasNext ? '' : ' disabled'}>下一页</button>
+        <button id="rd-last" class="ghost sm" type="button"${hasNext ? '' : ' disabled'}>末页</button>
       </div>`;
 
     CD.$('rd-back').onclick = close;
     bindRelations(v);
     const arch = CD.$('rd-arch');
     if (arch) arch.onclick = toggleArchived;
+    // 「已截断」角标可点：它是使用者唯一能看见「这里有东西看不到」的地方，
+    // 之前只能看不能点，等于告诉他「你看不全，而且没辙」。
+    root.querySelectorAll('[data-trunc]').forEach((el) =>
+      CD.clickable(el, () => { if (!cur.archived) toggleArchived(); }));
     CD.$('rd-raw').onclick = () => {
       raw = !raw;
       localStorage.setItem('chatdex.raw', raw ? '1' : '0');
       load();   // 重渲染这一页；分页位置与目标锚点都在 cur 里，不会丢
     };
-    const p = CD.$('rd-prev');
-    const n = CD.$('rd-next');
-    if (p) p.onclick = () => { cur.from -= PAGE; load(); };
-    if (n) n.onclick = () => { cur.from += PAGE; load(); };
+    CD.$('rd-first').onclick = () => goPage(1);
+    CD.$('rd-prev').onclick = () => goPage(currentPage - 1);
+    CD.$('rd-next').onclick = () => goPage(currentPage + 1);
+    CD.$('rd-last').onclick = () => goPage(pageCount);
+    CD.$('rd-page-form').onsubmit = (e) => {
+      e.preventDefault();
+      goPage(CD.$('rd-page').value);
+    };
 
     // Markdown 里的围栏代码块着色（必须在 DOM 上做，不对 HTML 串做替换）
     root.querySelectorAll('.msg .md').forEach((el) => CD.enhance(el));
@@ -106,27 +127,61 @@
     if (t) t.scrollIntoView({ block: 'center' });
   }
 
+  // 所有分页入口都走同一条 clamp + URL 同步路径；否则按钮不会越界，
+  // 手输页码却可能请求空页，而刷新又会回到旧的 seq。
+  function goPage(value) {
+    const pageCount = Math.max(1, Math.ceil(cur.total / PAGE));
+    const currentPage = Math.min(pageCount, Math.floor(cur.from / PAGE) + 1);
+    const text = String(value).trim();
+    const parsed = text === '' ? NaN : Number(text);
+    const wanted = Number.isFinite(parsed) ? Math.trunc(parsed) : currentPage;
+    const page = Math.max(1, Math.min(pageCount, wanted));
+    const from = (page - 1) * PAGE;
+    if (from === cur.from) {
+      const input = CD.$('rd-page');
+      if (input) input.value = String(page);
+      return;
+    }
+    cur.from = from;
+    cur.target = from;
+    CD.route.write({ replace: true, extra: { id: cur.id, seq: cur.target } });
+    load();
+  }
+
   /* ---------------- 从备份读原件 ---------------- */
 
   /* 备份仓库路径，用来拼那条可复制的恢复命令。
    * 只在第一次进入归档模式时取一次；备份没配就一直是空的。 */
   let repo = null;
 
-  /* 入口条：只在源文件已消失时出现。
+  /* 入口条：源文件已消失，**或者**这一页里有被截断的内容时出现。
    *
-   * 索引对工具结果是**故意有损**的（超阈值截断、非文本清空），所以
-   * 「看原件」对还活着的会话同样有价值——但那条路该直接读源文件，
-   * 不该绕 restic，是另一件事（BACKLOG）。这里只管源文件没了的情况：
-   * 那时索引是仅剩的一份，而它是残缺的。
+   * 索引对工具结果是**故意有损**的（超阈值截断、非文本清空）。实测 85229 个块
+   * 被截断、涉及 3438 个会话，其中 **1912 个会话的源文件还在磁盘上** ——
+   * 为这些人只显示一个不能点的「已截断」角标，等于告诉他「你看不全，而且没辙」。
+   *
+   * 后端已经会自己选来源（源文件还在读磁盘、没了才走备份），前端只负责
+   * 把来源**说出来**：磁盘上那份是当前内容，备份里那份是某个快照时刻的，
+   * 不说清楚就是让人拿旧的当新的。
    */
+  function hasTruncated(v) {
+    return (v.messages || []).some((m) => m.truncated);
+  }
+
   function archivedBar(v) {
-    if (v.alive && !cur.archived) return '';
-    const cmd = repo && v.file_path
+    if (v.alive && !cur.archived && !hasTruncated(v)) return '';
+    const fromDisk = v.alive;
+    const cmd = repo && v.file_path && !fromDisk
       ? `restic -r ${repo} restore latest --target / --include ${v.file_path}`
       : '';
+    const label = cur.archived
+      ? '← 看索引里的那份'
+      : (fromDisk ? '读源文件（看完整内容）' : '从备份读原件');
     return `<div class="arch-bar">
-      <button id="rd-arch" class="ghost sm" type="button">${
-        cur.archived ? '← 看索引里的那份' : '从备份读原件'}</button>
+      <button id="rd-arch" class="ghost sm" type="button">${label}</button>
+      ${!cur.archived && fromDisk
+        ? '<span class="restore">索引对工具结果做了截断，源文件里是完整的。</span>'
+        : ''}
       ${cur.archived && cmd
         ? `<span class="restore">要把文件恢复到磁盘，自己跑这条（chatdex 只读，不代劳）：
              <code class="mono">${CD.esc(cmd)}</code></span>`
@@ -258,7 +313,8 @@
           ${m.tool_name ? `<span class="tool">${CD.esc(m.tool_name)}</span>` : ''}
           <span>${CD.fmtTime(m.ts)}</span>
           <span>#${m.seq}</span>
-          ${m.truncated ? `<span class="trunc" title="原始 ${CD.fmtBytes(m.raw_bytes)}，索引时已截断">已截断</span>` : ''}
+          ${m.truncated ? `<button class="trunc" type="button" data-trunc="1"
+            title="原始 ${CD.fmtBytes(m.raw_bytes)}，索引时已截断 —— 点一下看完整内容">已截断</button>` : ''}
         </div>
         ${body(m)}
       </div>`;

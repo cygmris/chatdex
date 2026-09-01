@@ -18,10 +18,34 @@ func (s *Server) handleBackupStatus(w http.ResponseWriter, r *http.Request) {
 	st := s.Backup.Available(r.Context())
 	// 自动备份失败没人看着——需求 5.3 要求明确显示原因而不是只记日志，
 	// 所以把最后一次自动备份的结果一起带出去，界面上跟手动那次并排显示。
+	//
+	// 异地副本同理，而且更隐蔽：本地仓好好的，页面就一切正常，
+	// 而异地那份可能已经落后一个 GB。实测撞到过（2026-08-29，落后 1218 个文件），
+	// 那次是使用者开口问才暴露的——这个差额此前没有任何自动信号。
+	var mirror *backup.MirrorStatus
+	if s.Mirror != nil {
+		m := s.Mirror.Status(r.Context())
+		mirror = &m
+	}
 	writeJSON(w, http.StatusOK, struct {
 		backup.Status
-		LastAuto *backup.AutoResult `json:"last_auto,omitempty"`
-	}{st, s.Backup.LastAuto()})
+		LastAuto *backup.AutoResult   `json:"last_auto,omitempty"`
+		Mirror   *backup.MirrorStatus `json:"mirror,omitempty"`
+	}{st, s.Backup.LastAuto(), mirror})
+}
+
+func (s *Server) handleMirrorSync(w http.ResponseWriter, r *http.Request) {
+	if s.Mirror == nil {
+		writeErr(w, http.StatusServiceUnavailable, "备份功能未启用")
+		return
+	}
+	res, err := s.Mirror.Sync(r.Context())
+	if err != nil {
+		// 校验没过要当失败报，**不得**因为 copy 退了 0 就说成功
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
 }
 
 func (s *Server) handleBackupRun(w http.ResponseWriter, r *http.Request) {
@@ -115,7 +139,19 @@ func (s *Server) handleBackupCoverage(w http.ResponseWriter, r *http.Request) {
 	for _, f := range files {
 		sessions = append(sessions, backup.IndexedSession{Path: f.Path, Alive: f.Alive})
 	}
-	cov, err := s.Backup.Coverage(r.Context(), sessions)
+	// 并集索引的查询与进度由这一层注入 —— backup 包不认识 SQL。
+	// 「源已消失的会话还救不救得回来」必须跨全部快照判定：只看最新快照的话，
+	// 消失的文件按定义就不在里面，于是 rescued 恒为 0、lost 把能救的全算成没了。
+	seenInAny := func(paths []string) (map[string]bool, error) {
+		return s.Store.SeenInAnySnapshot(paths)
+	}
+	progress := backup.SeenProgress{}
+	if s.SeenScanner != nil {
+		if p, err := s.SeenScanner.Progress(r.Context()); err == nil {
+			progress = p
+		}
+	}
+	cov, err := s.Backup.Coverage(r.Context(), sessions, seenInAny, progress)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return

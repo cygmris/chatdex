@@ -126,7 +126,7 @@ func TestCoverageThreeWaySplit(t *testing.T) {
 
 	// 备之前：全部未覆盖，且不该报错（「还没备过」不是错误）
 	sessions := []IndexedSession{{Path: kept, Alive: true}, {Path: gone, Alive: true}}
-	cov, err := r.Coverage(ctx, sessions)
+	cov, err := r.Coverage(ctx, sessions, testSeen(t, r), testProgress(t, r))
 	if err != nil {
 		t.Fatalf("还没有快照时不该报错：%v", err)
 	}
@@ -139,7 +139,7 @@ func TestCoverageThreeWaySplit(t *testing.T) {
 	}
 
 	// 备之后：全部已覆盖
-	cov, err = r.Coverage(ctx, sessions)
+	cov, err = r.Coverage(ctx, sessions, testSeen(t, r), testProgress(t, r))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +156,7 @@ func TestCoverageThreeWaySplit(t *testing.T) {
 	}
 	cov, err = r.Coverage(ctx, []IndexedSession{
 		{Path: kept, Alive: true}, {Path: gone, Alive: false},
-	})
+	}, testSeen(t, r), testProgress(t, r))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +168,9 @@ func TestCoverageThreeWaySplit(t *testing.T) {
 	}
 
 	// 索引里有、备份里没有的 → missing
-	cov, err = r.Coverage(ctx, append(sessions, IndexedSession{Path: filepath.Join(src, "never.jsonl"), Alive: true}))
+	cov, err = r.Coverage(ctx, append(sessions,
+		IndexedSession{Path: filepath.Join(src, "never.jsonl"), Alive: true}),
+		testSeen(t, r), testProgress(t, r))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +208,7 @@ func TestLostIsCountedAndIsASubsetOfMissing(t *testing.T) {
 		sessions = append(sessions, IndexedSession{Path: filepath.Join(dir, "dead", strconv.Itoa(i)+".jsonl")})
 	}
 
-	cov, err := r.Coverage(ctx, sessions)
+	cov, err := r.Coverage(ctx, sessions, testSeen(t, r), testProgress(t, r))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -237,7 +239,7 @@ func TestCoverageTotalIsNotPageSize(t *testing.T) {
 	for i := 0; i < coverageLimit*3; i++ {
 		sessions = append(sessions, IndexedSession{Path: filepath.Join(dir, "s", string(rune('a'+i%26))+string(rune('a'+i/26))+".jsonl"), Alive: true})
 	}
-	cov, err := r.Coverage(ctx, sessions)
+	cov, err := r.Coverage(ctx, sessions, testSeen(t, r), testProgress(t, r))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -279,7 +281,7 @@ func TestCoverageReportsWhichSnapshotItUsed(t *testing.T) {
 
 	// ① 还没备过：不是「过期」，是「从没备过」——两者不能混成一个状态，
 	// 前者的下一步是「去看看为什么停了」，后者是「点一下备份」。
-	cov, err := r.Coverage(ctx, sessions)
+	cov, err := r.Coverage(ctx, sessions, testSeen(t, r), testProgress(t, r))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -294,7 +296,7 @@ func TestCoverageReportsWhichSnapshotItUsed(t *testing.T) {
 	if _, err := r.Backup(ctx); err != nil {
 		t.Fatal(err)
 	}
-	cov, err = r.Coverage(ctx, sessions)
+	cov, err = r.Coverage(ctx, sessions, testSeen(t, r), testProgress(t, r))
 	if err != nil {
 		t.Fatal(err)
 	}
