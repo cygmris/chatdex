@@ -43,7 +43,7 @@ func NewEngine(db *sql.DB) *Engine { return &Engine{db: db} }
 // Query 是一次检索的条件。多个条件以 AND 组合（需求 6.4）。
 type Query struct {
 	Text     string   `json:"text"`
-	Kinds    []string `json:"kinds"`     // user|assistant|tool_use|tool_result|summary
+	Kinds    []string `json:"kinds"`     // user|assistant|reasoning|tool_use|tool_result|summary
 	ToolName string   `json:"tool_name"` // 需求 7.3：「哪次用 rsync 部署的」
 	Source   string   `json:"source"`    // claude|codex
 	// Agent 三态："" 全部 | main 仅主会话 | sub 仅子 agent。

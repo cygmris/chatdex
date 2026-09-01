@@ -13,7 +13,7 @@ package index
 const schemaSQL = `
 CREATE TABLE IF NOT EXISTS sessions (
     id                INTEGER PRIMARY KEY,
-    source            TEXT    NOT NULL,          -- claude | codex
+    source            TEXT    NOT NULL,          -- claude | codex | grok
     session_uid       TEXT    NOT NULL,
     parent_uid        TEXT    NOT NULL DEFAULT '',
     agent_label       TEXT    NOT NULL DEFAULT '',
@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS blocks (
     session_id  INTEGER NOT NULL REFERENCES sessions(id),
     seq         INTEGER NOT NULL,               -- 会话内序号，回读定位与命中跳转
     ts          INTEGER NOT NULL DEFAULT 0,
-    kind        TEXT    NOT NULL,               -- user|assistant|tool_use|tool_result|summary
+    kind        TEXT    NOT NULL,               -- user|assistant|reasoning|tool_use|tool_result|summary
     tool_name   TEXT    NOT NULL DEFAULT '',
     tool_use_id TEXT    NOT NULL DEFAULT '',
     truncated   INTEGER NOT NULL DEFAULT 0,

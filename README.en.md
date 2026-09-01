@@ -46,19 +46,19 @@ chatdex has a specific answer to each, with measured numbers behind it — see
 
 | | |
 |---|---|
-| 🔍 **Mixed CJK/ASCII full-text search** | Per-character CJK splitting over FTS5. Median latency **37 ms** on a real 3 265-session / 747 K-block corpus |
+| 🔍 **Mixed CJK/ASCII full-text search** | Per-character CJK splitting over FTS5. Median **53 ms** on a real corpus of 4 425 sessions / 1.33 M blocks |
 | 🧠 **Summaries are indexed too** | A local LLM writes one line per session, **rephrasing in conceptual terms** — which is what closes the vocabulary gap above |
 | 💬 **Ask** | Ask in plain language; the LLM rewrites its query and retries across rounds, and **shows you every query it tried**; scope it to a single project or ask across everything |
 | 🏷 **Session names** | A name you set with `/rename` takes precedence over the LLM summary — what you called it beats what a model guessed |
 | 🕘 **Timeline & transcript replay** | Grouped by project, paginated by project; filters apply here too; click through to read the original exchange, paginated for long sessions; **click “truncated” to open the original** (from disk if the file is still there, from the backup otherwise) |
-| 🧬 **Subagents linked up** | Nearly half the sessions are subagents (48.5% on this machine). Filter to main sessions only or subagents only; expand a main session to see the subagents it dispatched, and jump back from a subagent to its parent |
+| 🧬 **Subagents linked up** | Nearly half the sessions are subagents (2 082 of 4 425 on the author's machine). Filter to main sessions only or subagents only; expand a main session to see the subagents it dispatched, and jump back from a subagent to its parent |
 | 📝 **Markdown, ANSI & syntax highlighting** | Assistant output renders as Markdown; ANSI colours in command output are coloured; code and commands are syntax-highlighted (colour scheme selectable, the default follows the interface theme); mermaid diagrams render on click. One click switches the transcript back to **raw bytes** |
 | 🔗 **Shareable links** | View, query, every filter, and the session you're reading all live in the URL — send it to someone and they get the same result. The back button works too |
 | 🔌 **MCP endpoint** | Your agent can look up "how did I solve this last time" by itself |
 | 🎨 **Four themes** | Light/dark/follow-system, all contrast ratios verified against WCAG AA by script |
 | ⚙️ **Settings UI** | Change config in the browser; most options take effect immediately |
 | 📈 **Generation progress** | Where summarising is up to, how long is left, which sessions failed and why, one-click retry; and a **time window** so it only runs when you want (e.g. `02:00-08:00` overnight, wrapping past midnight is fine) |
-| 🗄 **Backups (via restic)** | restic keeps it safe; chatdex answers what restic cannot — **are the sessions you indexed actually in the backup?** — and reads an original back once its source file is gone. restic is optional |
+| 🗄 **Backups (via restic)** | restic keeps it safe; chatdex answers what restic cannot — **are the sessions you indexed actually in the backup?** — and reads an original back once its source file is gone; the repo can also be mirrored to S3 / R2, reporting how many snapshots behind that copy is. restic is optional |
 | 🔒 **Read-only, localhost-only** | See [Security boundaries](#security-boundaries) |
 
 ## Quick start
@@ -149,7 +149,7 @@ right on the command itself.
 
 ### Subagents linked up
 
-Nearly half the sessions are subagents (1591 of 3265 on this machine). They used to sit in the results
+Nearly half the sessions are subagents (2 082 of 4 425). Left alone they sit in the results
 with no way to tell them apart or filter them out. Now you can view main sessions only or subagents
 only; a main session expands to the subagents it dispatched, and a subagent links back to its parent.
 
@@ -211,8 +211,11 @@ generation to a time window, so it runs overnight instead of competing for your 
 
 ### Backups
 
-restic sees paths; it has no idea what a session is. This page answers the question restic cannot —
-it checks every session in the index against the latest snapshot and splits the result four ways:
+restic sees paths; it has no idea what a session is. This page answers the question restic cannot.
+It checks every session in the index, with a different test depending on the session: if the source
+file **is still there**, it looks for it in the *latest* snapshot, because "am I protected right now"
+only counts the newest one; if the source file **is already gone**, it looks in *any* snapshot,
+because one surviving copy is enough to read it back. That yields four numbers:
 **covered / not backed up (source still there) / permanently lost / source gone but in the backup**.
 The middle two are both "not backed up", but one is fixed by ticking a directory in Settings and the
 other is gone forever — collapsing them into one number would be a lie.
@@ -234,19 +237,27 @@ no remote, so losing it means losing it). One line explaining each, one click to
 **Paths that hold plaintext credentials are flagged but never pre-selected** — whether your API keys
 go into the backup is your call.
 
-**The coverage check says which snapshot it was computed against.** That is not decoration: coverage
-always compares against the *latest* snapshot, and "latest" might be a week old — sessions created
+**The coverage check says which snapshot it was computed against.** That is not decoration: the
+"source still there" half always compares against the *latest* snapshot, and "latest" might be a week old — sessions created
 since then count as neither covered nor uncovered, because they are not in the baseline at all, while
 the page looks perfectly healthy. Anything older than a day raises an explicit warning.
 
-chatdex is **not a wrapper around restic**: no scheduling, no retention policy, and it never runs a
-restore for you (the UI just shows a command you can copy). Without restic installed, indexing and
-search are unaffected — the backup entry points are greyed out with the reason shown.
+**Offsite copy.** The restic repo can be mirrored to S3 / R2, and chatdex tells you **how many
+snapshots behind that copy is** — which is the part that matters: a copy of unknown freshness cannot
+be counted on when you are deciding whether you are safe. Configured under `backup.mirror`;
+credentials live in a separate env file (**never in `config.json`**, which is served to the browser
+and goes into the backup). Files are copied `config → keys → data → index → snapshots`, snapshots
+strictly last, then verified file by file — **an exit code of 0 does not mean the files match**.
+Automatic sync is **off** by default: it sends your data outbound, needs credentials, and uses
+bandwidth, and none of those three should be decided for you by a default. Leaving it off does not
+leave you in the dark — the page keeps reporting how far behind the copy is.
+
 
 ### Settings
 
-Every config option, rendered from a single declaration in the backend. Options needing a restart say
-so; index options note that they only affect newly indexed content.
+Change any option in the browser. The ones that need a restart say so, and index options note that
+they only affect content indexed from then on. (The page is generated from the backend's own config
+metadata, so "added an option but forgot the settings page" cannot happen.)
 
 ![Settings](docs/images/settings.png)
 
@@ -274,10 +285,10 @@ JSON behind.
 
 ## The index is **not** a backup (that is restic's job)
 
-The index stores *derived* text, not a copy of the original. Measured: 5.9 GB of source transcripts
-became 549 MB of indexed text (~9%). The gap is JSONL structural overhead plus these deliberate losses:
+The index stores *derived* text, not a copy of the original. Measured: 9.8 GB of source transcripts
+became 1.18 GB of indexed text (~12%). The gap is JSONL structural overhead plus these deliberate losses:
 
-- Tool results are **truncated at 4096 bytes** (configurable) — 38 K of 650 K blocks were truncated
+- Tool results are **truncated at 4096 bytes** (configurable) — 95 K of 1.33 M blocks were truncated
 - Images, binaries, and reasoning traces are **not indexed**
 - The `CLAUDE.md` / `AGENTS.md` text injected into every session's first message is **stripped**
 
@@ -287,8 +298,7 @@ and offset so it can point back.
 **Backups are restic's job; chatdex only does the part restic cannot.** The split: restic handles
 *keeping it safe* — content-addressed dedup, compression, encryption, `restic check`. chatdex handles
 what restic has no way of knowing — which paths matter, **whether the sessions you indexed are
-actually in the backup**, and how to read an original back once its source file is gone. restic sees
-paths; it has no idea what a session is.
+actually in the backup**, and how to read an original back once its source file is gone.
 
 chatdex is **not a wrapper around restic**: no scheduling (that is what a systemd timer is for),
 no retention policy, and it never performs a restore for you (the read-only rule applies to recovery
@@ -299,24 +309,33 @@ indexing and search work exactly as before and the backup entry points explain w
 
 Real corpus on real hardware, not a synthetic benchmark:
 
-All from one measurement run on 2026-08-05 (historical comparison in [architecture.md](docs/architecture.md)):
+Measured 2026-09-01 on the author's machine (historical comparison in [architecture.md](docs/architecture.md)):
 
 | | |
 |---|---|
-| Sessions / blocks | 3 265 (3 082 alive, 183 whose source file is gone) / 747 153 |
-| Indexed text / index size | 0.59 GB / 3.1 GB |
-| Search latency | median **37 ms**, p95 113 ms |
-| Slowest query | 529 ms — the single CJK character 的, matching 121 K blocks |
+| Sessions / blocks | 4 425 (2 336 alive, 2 089 whose source file is gone) / 1 331 761 |
+| Per source | Claude Code 3 893 · Codex 439 · Grok CLI 93 |
+| Indexed text / index size | 1.18 GB / 4.4 GB |
+| Search latency | median **53 ms**, p95 124 ms (30 queries × 3 runs) |
+| Slowest query | 958 ms — the single CJK character 的, matching hundreds of thousands of blocks |
 | Summary throughput | median 0.8 s/session; full run took **2 h 13 min** (measured 2026-07-29, not re-run) |
 
-## The two JSONL formats differ (read before writing a parser)
+## The three JSONL formats all differ (read before writing a parser)
 
-| | Claude Code | Codex |
-|---|---|---|
-| Path | `~/.claude/projects/<slug>/<uuid>.jsonl` | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` |
-| Role lives at | `message.role` | `payload.role` (outer `type: response_item`) |
-| Text field | `content` as string, or list items with `type=="text"` | list items with `type=="input_text"` |
-| Subagents | separate `<uuid>/subagents/agent-*.jsonl` | same file |
+| | Claude Code | Codex | Grok CLI |
+|---|---|---|---|
+| Path | `~/.claude/projects/<slug>/<uuid>.jsonl` | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` | `~/.grok/sessions/<percent-encoded cwd>/<uuid>/chat_history.jsonl` |
+| Role lives at | `message.role` | `payload.role` (outer `type: response_item`) | top-level `type` |
+| Text field | `content` as string, or list items with `type=="text"` | list items with `type=="input_text"` | `content`; **reasoning is in `summary[].text`** |
+| Timestamps | on every record | on every record | **absent from the transcript** — taken from `events.jsonl` next to it by `tool_call_id`, the rest interpolated |
+| Metadata | scattered through the transcript | first line, `session_meta` | `summary.json` next to it |
+| Subagents | separate `<uuid>/subagents/agent-*.jsonl` | same file | transcript sits at the project's top level; the parent's `subagents/<uuid>/` holds only `meta.json` |
+
+> [!WARNING]
+> For Grok, whether a session is a subagent **cannot be read off `agent_name` in `summary.json`**.
+> On the corpus at hand it lines up perfectly with main/sub (41/41, 30/30) — but that is a
+> coincidence of this corpus: the field means "which agent config was running". Use the structural
+> fact instead (decision 40 in architecture.md).
 
 Parsers are pluggable — implement the `Parser` interface in `internal/parser` and neither the index
 nor the search layer needs to change.
@@ -334,13 +353,13 @@ best one:
 - In-process embeddings — model choice, binary size, full-corpus vectorization time, hybrid ranking
   tuning — are the single most expensive piece of this project.
 
-So it's **gated**: collect 10 real cases where summaries *and* agent rewriting both failed. If this
-design solves ≥8 of 10, the requirement is closed permanently; otherwise it reopens and that set
-becomes its acceptance criteria. There is no embedding table or column pre-wired in the code.
+So it is not being built yet, but the bar is written down: collect 10 real cases where summaries
+*and* agent rewriting both failed. If what exists today solves 8 or more of them, the request is
+closed for good; if it doesn't, it reopens and those 10 cases are what it has to pass. There is no embedding table or column pre-wired in the code.
 
 ## Docs
 
-- [`docs/architecture.md`](docs/architecture.md) — architecture and nine key decisions **with their
+- [`docs/architecture.md`](docs/architecture.md) — architecture and 41 key decisions **with their
   costs**, including the full post-mortem of a 63.8 s → 276 ms query fix
 - [`docs/deploy.md`](docs/deploy.md) — deployment, configuration, troubleshooting
 - [`docs/design-parity.md`](docs/design-parity.md) — where the UI departs from its design mock, and why
