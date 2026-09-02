@@ -20,9 +20,13 @@ func New(engine *search.Engine) *mcp.Server {
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "search_sessions",
-		Description: "检索 Claude Code 与 Codex 的历史会话。按相关度返回会话列表，" +
+		Description: "检索 Claude Code、Codex 与 Grok CLI 的历史会话。按相关度返回会话列表，" +
 			"每条含会话 id、项目路径、原始文件绝对路径、命中片段与最佳命中位置（best_seq）。" +
-			"无命中时明确返回 no_match，不会给近似结果。",
+			"无命中时明确返回 no_match，不会给近似结果。\n" +
+			"读结果时注意两个字段的分工：summary 是这个会话的结论，snippet 只是**它为什么匹配**" +
+			"的证据，实测七成以上落在 tool_result / tool_use 上——那是机器输出或当时输入的参数，" +
+			"不是有人写下的结论。要看人写的正文就加 kind=assistant；要确认结论请用 get_session " +
+			"从 best_seq 读上下文，别把 snippet 当答案。",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, a SearchArgs) (*mcp.CallToolResult, SearchOutput, error) {
 		out, err := t.SearchSessions(a)
 		return nil, out, err

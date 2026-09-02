@@ -26,9 +26,9 @@ func toolDefs() []llm.ToolDef {
 				"type": "object",
 				"properties": map[string]any{
 					"query":     map[string]any{"type": "string", "description": "关键词，中英皆可，多个词空格分隔"},
-					"kind":      map[string]any{"type": "string", "description": "可选：user/assistant/tool_use/tool_result/summary"},
+					"kind":      map[string]any{"type": "string", "description": "可选：user/assistant/reasoning/tool_use/tool_result/summary"},
 					"tool_name": map[string]any{"type": "string", "description": "可选：工具名，如 Bash"},
-					"source":    map[string]any{"type": "string", "description": "可选：claude 或 codex"},
+					"source":    map[string]any{"type": "string", "description": "可选：claude / codex / grok"},
 					"project":   map[string]any{"type": "string", "description": "可选：项目路径"},
 					"limit":     map[string]any{"type": "integer", "description": "可选：返回条数，最多 20"},
 				},

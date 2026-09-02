@@ -26,9 +26,9 @@ type Tools struct{ Engine *search.Engine }
 
 type SearchArgs struct {
 	Query    string `json:"query" jsonschema:"关键词，中英皆可；多个词以空格分隔，按 AND 组合"`
-	Kind     string `json:"kind,omitempty" jsonschema:"限定内容类型：user/assistant/tool_use/tool_result/summary"`
+	Kind     string `json:"kind,omitempty" jsonschema:"限定内容类型：user/assistant/reasoning/tool_use/tool_result/summary。reasoning 目前只有 Grok 有"`
 	ToolName string `json:"tool_name,omitempty" jsonschema:"限定工具名，如 Bash"`
-	Source   string `json:"source,omitempty" jsonschema:"限定来源：claude 或 codex"`
+	Source   string `json:"source,omitempty" jsonschema:"限定来源：claude / codex / grok"`
 	Project  string `json:"project,omitempty" jsonschema:"限定项目路径（含其子目录）"`
 	From     int64  `json:"from,omitempty" jsonschema:"起始时间，unix 秒"`
 	To       int64  `json:"to,omitempty" jsonschema:"结束时间，unix 秒"`
