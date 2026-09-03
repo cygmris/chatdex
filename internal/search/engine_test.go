@@ -473,3 +473,55 @@ func TestTimelineHonorsAgentFilter(t *testing.T) {
 		t.Errorf("时间线 agent=sub 应有 2 条子 agent，实际 %d 条其中 %d 个子 agent", n, subs)
 	}
 }
+
+// LastSeq 的契约只有一条：**同一会话内最后一个命中块的 seq**。
+// 它存在的理由是 best_seq 只保证「最相关」不保证「最后」——两者不等时，
+// 你读到的可能是会话里已被后续覆盖的说法。
+//
+// 这里**刻意不断言 best 与 last 的先后**：那取决于 BM25 打分，是 FTS 的行为不是本项目的契约，
+// 断言它等于把测试绑在实现细节上（写这个测试时先后猜「长块排前」「短块排前」，两次都被实测推翻）。
+//
+// ⚠️ 一个会影响使用的实测性质：多词查询是 AND，订正块若没重复全部查询词就**根本不算命中**，
+// LastSeq 也不会指向它。这个提示只在「前后两处都匹配同一查询」时有效。
+func TestLastSeqIsTheLastMatchingBlock(t *testing.T) {
+	st, e := newEngine(t)
+
+	seedSessions(t, st,
+		seed{uid: "twice", project: "/p/a", blocks: []model.Block{
+			{Kind: model.KindUser, Body: "查一下出口"},
+			{Kind: model.KindToolResult, Body: "判定：住宅 IP"},
+			{Kind: model.KindAssistant, Body: "先按这个写文档"},
+			{Kind: model.KindToolResult, Body: "订正：住宅 IP 属误判，实测归属机房"},
+		}},
+		seed{uid: "once", project: "/p/b", blocks: []model.Block{
+			{Kind: model.KindUser, Body: "另一个话题"},
+			{Kind: model.KindToolResult, Body: "顺带提一句住宅 IP"},
+		}},
+	)
+
+	res, err := e.SearchSessions(search.Query{Text: "住宅"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	byUID := map[string]search.SessionHit{}
+	for _, s := range res.Sessions {
+		byUID[s.SessionUID] = s
+	}
+
+	got, ok := byUID["twice"]
+	if !ok {
+		t.Fatalf("应命中 twice，实得 %v", res.Sessions)
+	}
+	if got.LastSeq != 3 {
+		t.Fatalf("最后一个命中块是 seq=3，实得 %d", got.LastSeq)
+	}
+	if got.Hits != 2 {
+		t.Fatalf("应有 2 处命中，实得 %d", got.Hits)
+	}
+
+	// 只提一次时二者必然相等——MCP 层据此省略该字段，不给零信息量的提示
+	only := byUID["once"]
+	if only.LastSeq != only.BestSeq {
+		t.Fatalf("只提一次时 LastSeq 应等于 BestSeq，实得 last=%d best=%d", only.LastSeq, only.BestSeq)
+	}
+}

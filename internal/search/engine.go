@@ -81,8 +81,12 @@ type SessionHit struct {
 	Hits         int     `json:"hits"`  // 命中数：只展示，**不参与排序**
 	Snippet      string  `json:"snippet"`
 	BestSeq      int     `json:"best_seq"` // 最佳命中块的会话内序号，供跳转
-	BestKind     string  `json:"best_kind"`
-	BestTool     string  `json:"best_tool,omitempty"`
+	// LastSeq 是**同一会话内最后一次命中**的序号。BestSeq 只保证「最相关」不保证「最后」，
+	// 二者不等（实测约四成）意味着后面还有对同一关键词的讨论。
+	// 纯位置信息，不含对错判断——「靠前的那处更可能是错的」已被实测否掉。
+	LastSeq  int    `json:"last_seq"`
+	BestKind string `json:"best_kind"`
+	BestTool string `json:"best_tool,omitempty"`
 }
 
 // BlockHit 是块粒度的命中。
@@ -225,7 +229,14 @@ WITH f AS MATERIALIZED (`+ftsScoreCTE+`)
 SELECT s.id, s.source, s.session_uid, s.agent_label, s.parent_uid != '' AS is_sub, s.file_path, s.project_path,
        s.started_at, s.ended_at, s.msg_count, COALESCE(s.summary, ''),
        s.summary_model, s.summary_at, s.title,
-       MIN(f.score) AS score, f.bid AS best_bid, COUNT(*) AS hits
+       MIN(f.score) AS score, f.bid AS best_bid, COUNT(*) AS hits,
+       -- 🔴 last_seq 必须走子查询，不能在这里写 MAX(b.seq)：
+       -- SQLite 的「bare column 取自 min/max 那一行」只在查询里**恰好一个** min()/max()
+       -- 时成立。多写一个 MAX，上面的 f.bid 就可能取自 max(seq) 那行而非 min(score) 那行，
+       -- best_seq 与 snippet 会**静默指错块**——实测加了 MAX 后 best 从 0 变成 2，
+       -- 而全量测试照样退 0，没有任何测试会红。
+       (SELECT MAX(b2.seq) FROM f AS f2 JOIN blocks b2 ON b2.id = f2.bid
+        WHERE b2.session_id = s.id) AS last_seq
 FROM f
 JOIN blocks   b ON b.id = f.bid
 JOIN sessions s ON s.id = b.session_id
@@ -248,7 +259,7 @@ LIMIT ? OFFSET ?`, append(append([]any{match}, args...), limit, offset)...)
 		if err := rows.Scan(&h.ID, &h.Source, &h.SessionUID, &h.AgentLabel, &h.IsSub, &h.FilePath,
 			&h.ProjectPath, &h.StartedAt, &h.EndedAt, &h.MsgCount, &h.Summary,
 			&h.SummaryModel, &h.SummaryAt, &h.Title,
-			&h.Score, &bid, &h.Hits); err != nil {
+			&h.Score, &bid, &h.Hits, &h.LastSeq); err != nil {
 			return Result{}, err
 		}
 		res.Sessions = append(res.Sessions, h)

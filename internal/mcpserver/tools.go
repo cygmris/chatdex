@@ -46,9 +46,22 @@ type SessionBrief struct {
 	Summary     string `json:"summary,omitempty"`
 	Hits        int    `json:"hits"`
 	BestSeq     int    `json:"best_seq"` // 最佳命中所在序号，可直接喂给 get_session
-	BestKind    string `json:"best_kind,omitempty"`
-	BestTool    string `json:"best_tool,omitempty"`
-	Snippet     string `json:"snippet"`
+	// LastSeq 只在**它比 BestSeq 更靠后**时出现，含义是「后面还有对同一关键词的讨论」。
+	// ⚠️ 它不是「前面那处已作废」的信号：实测最佳块位置中位 56%、前后均匀，
+	// 「相关度偏向早期的错误版本」这条论据已被同批数据否掉（见 BACKLOG later-hit-marker）。
+	LastSeq  int    `json:"last_seq,omitempty"`
+	BestKind string `json:"best_kind,omitempty"`
+	BestTool string `json:"best_tool,omitempty"`
+	Snippet  string `json:"snippet"`
+}
+
+// laterSeq 只在最后一次命中确实晚于最佳命中时返回它。
+// 二者相等意味着「后面没有更多了」，此时给出该字段只是噪音。
+func laterSeq(best, last int) int {
+	if last > best {
+		return last
+	}
+	return 0
 }
 
 type SearchOutput struct {
@@ -80,6 +93,7 @@ func (t *Tools) SearchSessions(a SearchArgs) (SearchOutput, error) {
 			SessionID: s.ID, Source: s.Source, ProjectPath: s.ProjectPath, FilePath: s.FilePath,
 			StartedAt: s.StartedAt, EndedAt: s.EndedAt, MsgCount: s.MsgCount, Summary: s.Summary,
 			Hits: s.Hits, BestSeq: s.BestSeq, BestKind: s.BestKind, BestTool: s.BestTool,
+			LastSeq: laterSeq(s.BestSeq, s.LastSeq),
 			Snippet: clip(search.StripAll(s.Snippet), snippetChars),
 		})
 	}
