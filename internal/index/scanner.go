@@ -21,6 +21,10 @@ type Scanner struct {
 	Reg   *parser.Registry
 	Cfg   Config
 
+	// ScanRoots 非空时覆盖解析器默认根目录。空则用 Reg.Roots()。
+	// 每条必须是真实目录：WalkDir 不跟进目录符号链接。
+	ScanRoots []string
+
 	// OnFile 在每个文件处理完后回调，供 CLI 打进度。可为 nil。
 	OnFile func(path string, indexed int)
 }
@@ -85,7 +89,13 @@ func (s *Scanner) ScanOnce() (Report, error) {
 	var rep Report
 	seen := map[string]bool{}
 
-	for _, root := range s.Reg.Roots() {
+	for _, root := range s.roots() {
+		if skip, reason := skipWalkRoot(root); skip {
+			if reason != "" {
+				slog.Warn("跳过扫描根", "path", root, "reason", reason)
+			}
+			continue
+		}
 		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				// 目录不存在（没装某个工具）不算错误
@@ -145,6 +155,34 @@ func (s *Scanner) ScanOnce() (Report, error) {
 		rep.DBBytes = st.DBBytes
 	}
 	return rep, nil
+}
+
+func (s *Scanner) roots() []string {
+	if len(s.ScanRoots) > 0 {
+		return s.ScanRoots
+	}
+	return s.Reg.Roots()
+}
+
+// skipWalkRoot 在 WalkDir 之前拦下符号链接根。
+//
+// WalkDir 对根也走 Lstat：根是 symlink 时 IsDir() 为假，整棵树直接不进。
+// 不在这里说清楚的话，配置了 scan.roots 却索引为空，看起来像服务坏了。
+func skipWalkRoot(root string) (skip bool, reason string) {
+	fi, err := os.Lstat(root)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return true, ""
+		}
+		return true, err.Error()
+	}
+	if fi.Mode()&os.ModeSymlink != 0 {
+		return true, "是符号链接，WalkDir 不会跟进"
+	}
+	if !fi.IsDir() {
+		return true, "不是目录"
+	}
+	return false, ""
 }
 
 func (s *Scanner) indexFile(p parser.Parser, path string, rep *Report) error {

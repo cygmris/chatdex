@@ -19,6 +19,7 @@ import (
 	"github.com/cygmris/chatdex/internal/mcpserver"
 	"github.com/cygmris/chatdex/internal/search"
 	"github.com/cygmris/chatdex/internal/summary"
+	"github.com/cygmris/chatdex/internal/version"
 )
 
 // loopback 是唯一允许的监听地址。
@@ -57,7 +58,16 @@ func runServe(args []string) error {
 	defer st.Close()
 
 	engine := search.NewEngine(st.DB())
-	api := &httpapi.Server{Engine: engine, Store: st, Reg: sc.Reg}
+	api := &httpapi.Server{
+		Engine:    engine,
+		Store:     st,
+		Reg:       sc.Reg,
+		Version:   version.Version,
+		Commit:    version.Commit,
+		UIPort:    cfg.Ports.UI,
+		APIPort:   cfg.Ports.API,
+		IndexPath: cfg.DBPath,
+	}
 
 	// LLM 是可选依赖：配不上或没起来，索引与检索照常，只是没有摘要、聊天置灰。
 	ctx, cancel := context.WithCancel(context.Background())

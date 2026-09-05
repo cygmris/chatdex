@@ -23,8 +23,8 @@ type FieldMeta struct {
 	Group    string `json:"group"`
 }
 
-// restartHint 是需重启项的统一提示。
-const restartHint = "改完需重启：systemctl --user restart chatdex"
+// restartHint 是需重启项的统一提示。不写死 systemctl：macOS 没有它。
+const restartHint = "改完需重启 chatdex 服务"
 
 // Fields 是全部可配置项。顺序即界面上的顺序。
 func Fields() []FieldMeta {
@@ -63,6 +63,11 @@ func Fields() []FieldMeta {
 		// ---- 索引 ----
 		{Key: "scan.interval_sec", Label: "扫描间隔（秒）", Kind: "int", Hot: true, Group: "索引",
 			Help: "多久扫一次会话目录找新内容", Min: 5, Max: 3600},
+		{Key: "scan.roots", Label: "扫描根目录", Kind: "paths", Hot: false, Optional: true, Group: "索引",
+			Help: "空 = 扫全部解析器默认目录（~/.claude/projects、~/.codex/sessions、~/.grok/sessions）。" +
+				"非空则只扫列出的真实目录，不在范围内的已索引会话会被标为失效。" +
+				"必须是绝对路径。filepath.WalkDir 不跟进目录符号链接，不要把 symlink 当缩小范围的办法。",
+			Note: restartHint},
 		{Key: "index.tool_result_cap", Label: "工具结果截断阈值（字节）", Kind: "int", Hot: true, Group: "索引",
 			Help: "单条工具结果只索引前 N 字节。4096 覆盖 p90 完整", Min: 256, Max: 1 << 20,
 			Note: "只影响之后新索引的内容；要让历史内容也改变，需停服务后跑 chatdex index"},
@@ -79,7 +84,8 @@ func Fields() []FieldMeta {
 			// help 一律按纯文本转义后显示，写 markdown 只会把星号原样吐出来
 			Help: "只填路径，密码不会存进 chatdex 的配置、日志或界面。⚠️ 密码丢失 = 备份不可恢复。"},
 		{Key: "backup.restic_path", Label: "restic 可执行文件", Kind: "string", Hot: true, Optional: true, Group: "备份",
-			Help: "留空则从 PATH 找。装在 ~/.local/bin 时通常要填——systemd --user 起的服务其 PATH 未必包含它。"},
+			Help: "留空则从 PATH 找。装在 ~/.local/bin 时通常要填绝对路径——" +
+				"systemd --user 与 macOS launchd 起的服务其 PATH 都很短（launchd 默认只有 /usr/bin:/bin:/usr/sbin:/sbin）。"},
 		{Key: "backup.sources", Label: "备份哪些目录", Kind: "sources", Hot: true, Optional: true, Group: "备份",
 			Help: "勾选要备份的目录，可只备其中一个也可全部。默认列出会话目录，也可加任意其它路径。"},
 		{Key: "backup.after_scan", Label: "扫描后顺手备一次", Kind: "bool", Hot: true, Group: "备份",
@@ -94,7 +100,8 @@ func Fields() []FieldMeta {
 			Help: "默认关：同步要往外发数据、要凭据、要带宽，这三件事不该由默认值替你决定。" +
 				"关着也不会让你蒙在鼓里——备份页会一直报「异地副本落后 N 个快照」。"},
 		{Key: "backup.mirror.rclone_path", Label: "rclone 可执行文件", Kind: "string", Hot: true, Optional: true, Group: "备份",
-			Help: "留空则从 PATH 找。同步靠它执行（chatdex 不自研 S3 客户端）。"},
+			Help: "留空则从 PATH 找。同步靠它执行（chatdex 不自研 S3 客户端）。" +
+				"与 restic 相同：launchd / systemd --user 的 PATH 很短，建议填绝对路径。"},
 
 		// ---- 需重启 ----
 		{Key: "ports.ui", Label: "dashboard 端口", Kind: "int", Hot: false, Group: "服务",
@@ -137,6 +144,11 @@ func (c Config) Get(key string) any {
 		return c.Chat.MaxToolRounds
 	case "scan.interval_sec":
 		return c.Scan.IntervalSec
+	case "scan.roots":
+		if c.Scan.Roots == nil {
+			return []string{}
+		}
+		return c.Scan.Roots
 	case "index.tool_result_cap":
 		return c.Index.ToolResultCap
 	case "index.tool_result_body":

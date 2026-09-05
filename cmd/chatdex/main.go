@@ -14,6 +14,8 @@ const usage = `chatdex —— Claude Code / Codex 会话检索服务
   chatdex serve     常驻服务（dashboard :5021 / API+MCP :5022）
   chatdex index     跑一轮索引后退出
   chatdex status    打印索引状态
+  chatdex doctor    检查配置、端口、索引库与 HTTP 健康
+  chatdex version   打印版本
 `
 
 func main() {
@@ -30,6 +32,11 @@ func main() {
 		err = runIndex(os.Args[2:])
 	case "status":
 		err = runStatus(os.Args[2:])
+	case "doctor":
+		err = runDoctor(os.Args[2:])
+	case "version", "--version", "-v":
+		fmt.Println(runVersion())
+		return
 	case "-h", "--help", "help":
 		fmt.Print(usage)
 		return

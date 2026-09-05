@@ -86,9 +86,17 @@ go build -o ~/.local/bin/chatdex ./cmd/chatdex
 
 Open <http://127.0.0.1:5021>. To keep it running:
 
+Linux:
+
 ```bash
 cp deploy/systemd/chatdex.service ~/.config/systemd/user/
 systemctl --user enable --now chatdex
+```
+
+macOS (per-user launchd, no root):
+
+```bash
+./scripts/macos-install.sh
 ```
 
 Full deployment and troubleshooting: [`docs/deploy.md`](docs/deploy.md).

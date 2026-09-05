@@ -109,6 +109,50 @@ func TestSessionEndpoint(t *testing.T) {
 	}
 }
 
+func TestHealthEndpoint(t *testing.T) {
+	st, err := index.Open(filepath.Join(t.TempDir(), "index.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+
+	mux := http.NewServeMux()
+	(&httpapi.Server{
+		Engine:    search.NewEngine(st.DB()),
+		Store:     st,
+		Version:   "test-ver",
+		Commit:    "abc123",
+		UIPort:    5021,
+		APIPort:   5022,
+		IndexPath: "index.db",
+	}).Register(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	var h struct {
+		OK      bool           `json:"ok"`
+		Status  string         `json:"status"`
+		Version string         `json:"version"`
+		Commit  string         `json:"commit"`
+		Ports   map[string]int `json:"ports"`
+		Index   struct {
+			OK bool `json:"ok"`
+		} `json:"index"`
+	}
+	if code := getJSON(t, srv.URL+"/api/health", &h); code != 200 {
+		t.Fatalf("状态码 = %d", code)
+	}
+	if !h.OK || h.Status != "ok" || h.Version != "test-ver" || h.Commit != "abc123" {
+		t.Errorf("health = %+v", h)
+	}
+	if h.Ports["ui"] != 5021 || h.Ports["api"] != 5022 {
+		t.Errorf("ports = %v", h.Ports)
+	}
+	if !h.Index.OK {
+		t.Error("索引应可打开")
+	}
+}
+
 func TestStatsAndProjectsEndpoints(t *testing.T) {
 	srv, _ := newServer(t)
 

@@ -124,14 +124,17 @@ token 会被 `TestThemesDefineSameTokens` 当场拦下，而不是在页面上�
 
 ### 9. 配置元信息只声明一次，热生效靠「每次用时取」
 
-`config.Fields()` 是 16 个配置项的唯一声明（key / label / help / kind / hot / min / max /
+`config.Fields()` 是全部配置项的唯一声明（key / label / help / kind / hot / min / max /
 options），`GET /api/config` 把它下发给前端渲染整张表单——前端不写第二份字段清单，
 新增配置项只改 `meta.go`。`TestFieldsCoverEveryConfigKey` 反向校验条数，漏一个就失败。
 
 热生效的关键不在保存那一侧，而在**读取**那一侧：`config.Live` 持 `atomic.Pointer[Config]`，
 `summary.Worker` 与 `chat.Agent` 必须每轮从它取值。启动时把 Model 拷成结构体字段的
-那一刻，这个配置项就悄悄变成「需重启」了。真正需重启的四项（两个端口、`db_path`、
-`scan.roots`）在元信息里标 `hot:false`，界面上打角标并给出重启命令，不假装已生效。
+那一刻，这个配置项就悄悄变成「需重启」了。真正需重启的项（两个端口、`db_path`、
+`home`、`scan.roots`）在元信息里标 `hot:false`，界面上打角标并给出重启命令，不假装已生效。
+
+`scan.roots` 空则扫各解析器默认目录；非空则只 Walk 这些真实目录。扫描用
+`filepath.WalkDir`，**不跟进目录符号链接**——不要把 symlink 当缩小索引范围的功能。
 
 保存只写**与默认值不同的键**：文件里永远只有「你改过的东西」，将来调整默认值能自动
 跟随，而不是被一份固化的旧默认值锁死。写入走 `.tmp → chmod 0600 → rename`。

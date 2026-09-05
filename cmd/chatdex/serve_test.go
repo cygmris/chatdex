@@ -182,6 +182,33 @@ func TestSecondInstanceRefusedBeforeTouchingIndex(t *testing.T) {
 	}
 }
 
+func TestHealthEndpointServesVersionAndIndex(t *testing.T) {
+	_, apiPort, _ := startServe(t)
+	waitIndexed(t, apiPort)
+
+	code, body := get(t, fmt.Sprintf("http://127.0.0.1:%d/api/health", apiPort))
+	if code != 200 {
+		t.Fatalf("状态码 = %d body=%s", code, body)
+	}
+	var h struct {
+		OK      bool   `json:"ok"`
+		Version string `json:"version"`
+		Index   struct {
+			OK       bool `json:"ok"`
+			Sessions int  `json:"sessions"`
+		} `json:"index"`
+	}
+	if err := json.Unmarshal([]byte(body), &h); err != nil {
+		t.Fatal(err)
+	}
+	if !h.OK || !h.Index.OK || h.Index.Sessions == 0 {
+		t.Errorf("health = %s", body)
+	}
+	if h.Version == "" {
+		t.Error("health 没带版本")
+	}
+}
+
 func TestStatsEndpoint(t *testing.T) {
 	_, apiPort, _ := startServe(t)
 	waitIndexed(t, apiPort)

@@ -145,6 +145,7 @@ func TestValidatePointsAtTheField(t *testing.T) {
 		{func(c *Config) { c.Summary.ThrottleMS = -1 }, "summary.throttle_ms"},
 		{func(c *Config) { c.Chat.MaxToolRounds = 0 }, "chat.max_tool_rounds"},
 		{func(c *Config) { c.Scan.IntervalSec = 1 }, "scan.interval_sec"},
+		{func(c *Config) { c.Scan.Roots = []string{"relative/path"} }, "scan.roots"},
 		{func(c *Config) { c.Index.ToolResultCap = 0 }, "index.tool_result_cap"},
 		{func(c *Config) { c.UI.LightTheme = "nope" }, "ui.light_theme"},
 		{func(c *Config) { c.Ports.API = c.Ports.UI }, "ports.api"},
@@ -210,6 +211,27 @@ func TestFieldsCoverEveryConfigKey(t *testing.T) {
 // diffFromDefault 原本用 `cur != base` 比较 any —— 接口里装着切片时
 // 那不是返回 false，是**直接崩**。在 backup.sources（[]BackupSource）加进来
 // 之前所有配置值恰好都是标量，所以这个假设一直没被戳破。
+func TestScanRootsRoundTripAndRejectsRelative(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	c := Default()
+	c.Scan.Roots = []string{"/abs/claude-project"}
+	if err := Save(path, c); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Scan.Roots) != 1 || got.Scan.Roots[0] != "/abs/claude-project" {
+		t.Errorf("scan.roots 往返丢失: %#v", got.Scan.Roots)
+	}
+
+	c.Scan.Roots = []string{"not/absolute"}
+	if err := Save(path, c); err == nil {
+		t.Fatal("相对路径的 scan.roots 竟然保存成功了")
+	}
+}
+
 func TestSaveHandlesNonComparableValues(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	c := Default()

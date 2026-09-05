@@ -24,7 +24,8 @@ func openIndex(cfg config.Config) (*index.Store, *index.Scanner, error) {
 			parser.Codex{Home: cfg.Home},
 			parser.Grok{Home: cfg.Home},
 		),
-		Cfg: cfg.Index,
+		Cfg:       cfg.Index,
+		ScanRoots: cfg.Scan.Roots,
 	}
 	return st, sc, nil
 }
@@ -48,7 +49,7 @@ func runIndex(args []string) error {
 	ln, err := listen(cfg.Ports.API)
 	if err != nil {
 		return fmt.Errorf("chatdex 服务正在运行（端口 %d 被占用）。"+
-			"服务本身会增量索引；要手动重建请先 systemctl --user stop chatdex", cfg.Ports.API)
+			"服务本身会增量索引；要手动重建请先停止服务", cfg.Ports.API)
 	}
 	defer ln.Close()
 

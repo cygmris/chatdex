@@ -74,9 +74,17 @@ go build -o ~/.local/bin/chatdex ./cmd/chatdex
 
 浏览器打开 <http://127.0.0.1:5021>。常驻运行：
 
+Linux：
+
 ```bash
 cp deploy/systemd/chatdex.service ~/.config/systemd/user/
 systemctl --user enable --now chatdex
+```
+
+macOS（用户级 launchd，不用 root）：
+
+```bash
+./scripts/macos-install.sh
 ```
 
 完整部署与排查见 [`docs/deploy.md`](docs/deploy.md)。

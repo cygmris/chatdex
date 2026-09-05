@@ -62,6 +62,15 @@ func Validate(c Config) []FieldError {
 	if c.Ports.UI == c.Ports.API {
 		add("ports.api", "不能与 dashboard 端口相同")
 	}
+	for _, p := range c.Scan.Roots {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if !filepath.IsAbs(p) {
+			add("scan.roots", fmt.Sprintf("%q 必须是绝对路径", p))
+		}
+	}
 	return errs
 }
 

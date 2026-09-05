@@ -31,6 +31,12 @@ type Config struct {
 
 type Scan struct {
 	IntervalSec int `json:"interval_sec"`
+	// Roots 缩小扫描范围。空 = 用各解析器的默认会话目录。
+	//
+	// 非空时只 Walk 这些路径，不在范围内的已索引会话会被标为失效。
+	// 每条必须是绝对路径，且必须是真实目录：filepath.WalkDir 不跟进
+	// 目录符号链接，把 symlink 填进来等于没扫。
+	Roots []string `json:"roots"`
 }
 
 type Summary struct {

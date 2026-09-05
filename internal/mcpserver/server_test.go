@@ -216,3 +216,56 @@ func TestAgentFacingTextHasNoControlMarkers(t *testing.T) {
 		}
 	}
 }
+
+// last_seq 只在「best 之后还有命中」时出现——相等就省略，别给零信息量的字段。
+// 两个分支都要覆盖：省略那半靠不存在来表达，最容易在重构里悄悄失效。
+func TestLastSeqOnlyWhenThereIsMoreAfter(t *testing.T) {
+	st, err := index.Open(filepath.Join(t.TempDir(), "index.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+
+	id, err := st.UpsertSession(model.SessionMeta{
+		Source: model.SourceClaude, SessionUID: "u2", FilePath: "/sessions/u2.jsonl",
+		ProjectPath: "/proj/beta", StartedAt: 1000, EndedAt: 2000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AppendBlocks(id, []model.Block{
+		{Seq: 0, TS: 1000, Kind: model.KindUser, Body: "住宅 住宅 住宅 出口判定为住宅"},
+		{Seq: 1, TS: 1001, Kind: model.KindAssistant, Body: "先按这个写"},
+		{Seq: 2, TS: 1002, Kind: model.KindToolResult, Body: "订正：住宅属误判，实测机房"},
+		{Seq: 3, TS: 1003, Kind: model.KindAssistant, Body: "另说一件无关的事情"},
+	}, index.Watermark{Size: 1, MTime: 1, Offset: 1}); err != nil {
+		t.Fatal(err)
+	}
+	sess := connect(t, search.NewEngine(st.DB()))
+
+	var two mcpserver.SearchOutput
+	callJSON(t, sess, "search_sessions", mcpserver.SearchArgs{Query: "住宅"}, &two)
+	if len(two.Sessions) != 1 {
+		t.Fatalf("应命中 1 个会话，实得 %d", len(two.Sessions))
+	}
+	// 🔴 这条守的是一个已经踩过的回归：last_seq 若在主聚合里写成 MAX(b.seq)，
+	// 就会破坏 SQLite「bare column 取自 min/max 那一行」的前提（该保证要求全查询
+	// 恰好一个 min/max），于是 best_seq 会被悄悄换成 max(seq) 那一行。
+	// 实测那次 best 从 0 变成 2，而全量测试仍然退 0——所以必须显式断言 best_seq。
+	if two.Sessions[0].BestSeq != 0 {
+		t.Errorf("最相关的是词频更高的首块（seq=0），实得 best_seq=%d —— "+
+			"检查 last_seq 是否又被写回主聚合的 MAX()", two.Sessions[0].BestSeq)
+	}
+	if two.Sessions[0].LastSeq != 2 {
+		t.Errorf("后面还有命中时应给出 last_seq=2，实得 %d", two.Sessions[0].LastSeq)
+	}
+
+	var one mcpserver.SearchOutput
+	callJSON(t, sess, "search_sessions", mcpserver.SearchArgs{Query: "无关"}, &one)
+	if len(one.Sessions) != 1 {
+		t.Fatalf("应命中 1 个会话，实得 %d", len(one.Sessions))
+	}
+	if one.Sessions[0].LastSeq != 0 {
+		t.Errorf("只有一处命中时应省略 last_seq，实得 %d", one.Sessions[0].LastSeq)
+	}
+}

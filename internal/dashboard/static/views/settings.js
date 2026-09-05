@@ -57,6 +57,7 @@
       el.oninput = el.onchange = () => {
         dirty[el.dataset.key] = el.type === 'checkbox' ? el.checked
           : (el.dataset.kind === 'int' || el.dataset.kind === 'bytes') ? Number(el.value)
+          : el.dataset.kind === 'paths' ? el.value.split('\n').map((s) => s.trim()).filter(Boolean)
           : el.value;
         CD.$('set-msg').textContent = '有未保存的修改';
       };
@@ -132,6 +133,9 @@
       // 单独一个分支而不是塞进文本框：勾选/取消是这里最主要的操作，
       // 让人去编辑一段 JSON 字符串是把界面的活推给用户。
       input = renderSources(id, f.key, Array.isArray(v) ? v : []);
+    } else if (f.kind === 'paths') {
+      const list = Array.isArray(v) ? v : [];
+      input = `<textarea id="${id}" data-key="${f.key}" data-kind="paths" rows="4">${CD.esc(list.join('\n'))}</textarea>`;
     } else {
       const type = f.kind === 'int' || f.kind === 'bytes' ? 'number' : 'text';
       input = `<input type="${type}" id="${id}" data-key="${f.key}" data-kind="${f.kind}" value="${CD.esc(v)}"
@@ -204,7 +208,7 @@
       const needRestart = Object.keys(dirty).some(
         (k) => !fields.find((f) => f.key === k)?.hot);
       msg.textContent = needRestart
-        ? '已保存。其中有需重启才生效的项：systemctl --user restart chatdex'
+        ? '已保存。其中有需重启才生效的项，请重启 chatdex 服务'
         : '已保存并立即生效。';
       await load();
     } finally {

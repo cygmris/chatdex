@@ -6,7 +6,10 @@ import (
 
 	"github.com/cygmris/chatdex/internal/config"
 	"github.com/cygmris/chatdex/internal/index"
+	"github.com/cygmris/chatdex/internal/version"
 )
+
+func runVersion() string { return version.String() }
 
 func runStatus(args []string) error {
 	fs := flag.NewFlagSet("status", flag.ExitOnError)
@@ -28,6 +31,7 @@ func runStatus(args []string) error {
 	if err != nil {
 		return err
 	}
+	fmt.Printf("版本     %s\n", version.String())
 	fmt.Printf("索引库   %s（%s）\n", cfg.DBPath, humanBytes(s.DBBytes))
 	fmt.Printf("会话     %d（失效 %d）\n", s.Sessions, s.DeadSessions)
 	fmt.Printf("内容块   %d（截断 %d）\n", s.Blocks, s.TruncatedBlocks)

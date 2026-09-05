@@ -67,6 +67,12 @@ type Server struct {
 	// 覆盖率靠它回答「源没了的会话还救不救得回来」——只看最新快照答不出，
 	// 因为消失的文件按定义就不在最新快照里。
 	SeenScanner *backup.SeenScanner
+
+	Version   string
+	Commit    string
+	UIPort    int
+	APIPort   int
+	IndexPath string
 }
 
 // Register 把 API 路由挂到 mux 上。
@@ -81,6 +87,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/timeline", s.handleTimeline)
 	mux.HandleFunc("GET /api/projects", s.handleProjects)
 	mux.HandleFunc("GET /api/stats", s.handleStats)
+	mux.HandleFunc("GET /api/health", s.handleHealth)
 	mux.HandleFunc("POST /api/summary/pause", s.handleSummaryPause)
 	mux.HandleFunc("POST /api/summary/resume", s.handleSummaryResume)
 	mux.HandleFunc("POST /api/summary/retry", s.handleSummaryRetry)

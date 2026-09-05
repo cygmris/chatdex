@@ -102,3 +102,43 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: "0"
         run: go build -o /dev/null ./cmd/chatdex
+
+      - name: 校验 launchd plist 模板（不依赖 macOS）
+        if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
+        run: |
+          set -euo pipefail
+          chmod +x scripts/macos-service.sh scripts/macos-ci.sh scripts/macos-install.sh
+          scripts/macos-ci.sh
+
+  macos:
+    name: macOS arm64 服务脚本
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: go vet / gofmt / 测试
+        run: |
+          set -euo pipefail
+          go vet ./...
+          unformatted=$(gofmt -l $(git ls-files '*.go'))
+          if [ -n "$unformatted" ]; then
+            echo "以下文件没 gofmt 过："
+            echo "$unformatted"
+            exit 1
+          fi
+          go test ./... -count=1
+
+      - name: 本机构建 darwin/arm64 并跑隔离安装
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          set -euo pipefail
+          chmod +x scripts/macos-service.sh scripts/macos-ci.sh scripts/macos-install.sh
+          go build -o /tmp/chatdex-ci ./cmd/chatdex
+          file /tmp/chatdex-ci
+          CHATDEX_PREBUILT=/tmp/chatdex-ci CHATDEX_CI_PREFIX="$RUNNER_TEMP/chatdex-macos-ci" scripts/macos-ci.sh
