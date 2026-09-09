@@ -704,6 +704,23 @@ CD.sessionTitle = (s) => (s.title || '').trim() || (s.summary || '').trim() || '
 // 有名字时摘要降为次要行——两者互补：名字说「我叫它什么」，摘要说「这次在干嘛」
 CD.sessionSubtitle = (s) => ((s.title || '').trim() && (s.summary || '').trim()) || '';
 
+/**
+ * 来源标签。**一处定义，四个视图共用**（检索/时间线/摘要/回读）。
+ *
+ * 🔴 原先四处各写一个二元三目 `s.source === 'codex' ? 'CODEX' : 'CLAUDE'`。
+ * R23 接入 Grok 后，那 243 个 grok 会话在四处**全被标成 CLAUDE**——
+ * 界面不是少显示一个来源，是在说假话。二元判断遇到第三个值时不会报错，
+ * 只会把它归进 else 分支，所以加来源时不会有任何东西提醒你改这里。
+ * ⇒ 改成查表：新来源没登记就原样显示大写值，宁可露出 `GROK` 这种未加工的字样，
+ * 也不能安静地冒充成别的来源。
+ */
+const SOURCE_LABELS = { claude: 'CLAUDE', codex: 'CODEX', grok: 'GROK' };
+CD.sourceLabel = (src) => SOURCE_LABELS[src] || String(src || '').toUpperCase() || '—';
+
+// 回读页用的是首字母大写的写法，与徽章的全大写并存是刻意的：徽章要在列表里一眼扫到，正文头部要读着自然
+const SOURCE_NAMES = { claude: 'Claude', codex: 'Codex', grok: 'Grok' };
+CD.sourceName = (src) => SOURCE_NAMES[src] || String(src || '') || '—';
+
 CD.fmtTime = (u) =>
   u ? new Date(u * 1000).toLocaleString('zh-CN', { hour12: false }) : '—';
 

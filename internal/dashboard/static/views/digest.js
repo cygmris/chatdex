@@ -42,7 +42,7 @@
             CD.query.q ? CD.escHit(s.snippet) : CD.esc(CD.sessionTitle(s))}</p>${
             !CD.query.q && CD.sessionSubtitle(s) ? `<p class="sub-sum">${CD.esc(CD.sessionSubtitle(s))}</p>` : ''}
           <div class="foot">
-            <span class="badge">${s.source === 'codex' ? 'CODEX' : 'CLAUDE'}</span>
+            <span class="badge">${CD.sourceLabel(s.source)}</span>
             ${s.is_sub ? '<span class="badge sub">子代理</span>' : ''}
             <span class="path">${CD.esc(s.project_path || '（未知项目）')}</span>
             <span>${CD.fmtRange(s.started_at, s.ended_at)}</span>

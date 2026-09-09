@@ -71,7 +71,7 @@
         <div class="reader-meta">
           <div class="path mono">${CD.esc(v.project_path || '（未知项目）')}</div>
           <div class="muted">${CD.fmtRange(v.started_at, v.ended_at)} · ${v.total} 条 ·
-            ${v.source === 'codex' ? 'Codex' : 'Claude'}${v.is_sub ? ' · 子代理' : ''}
+            ${CD.sourceName(v.source)}${v.is_sub ? ' · 子代理' : ''}
             ${v.alive ? '' : ' · <span class="err-inline">原始文件已不存在</span>'}
             ${cur.archived ? ` · <span class="ok-inline">正在看原件（${
               v.origin === 'disk' ? '源文件' : '备份'}）</span>` : ''}</div>

@@ -85,7 +85,7 @@
         </h2>
         ${g.sessions.map((s) => `
           <button class="tl" type="button" data-id="${s.id}" data-seq="${s.target_seq || 0}">
-            <span class="badge">${s.source === 'codex' ? 'CODEX' : 'CLAUDE'}</span>
+            <span class="badge">${CD.sourceLabel(s.source)}</span>
             ${s.is_sub ? '<span class="badge sub">子代理</span>' : ''}
             <span class="tl-time mono">${CD.fmtRange(s.started_at, s.ended_at)}</span>
             <span class="tl-n mono">${s.msg_count} 条</span>
