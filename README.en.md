@@ -46,12 +46,12 @@ chatdex has a specific answer to each, with measured numbers behind it — see
 
 | | |
 |---|---|
-| 🔍 **Mixed CJK/ASCII full-text search** | Per-character CJK splitting over FTS5. Median **53 ms** on a real corpus of 4 425 sessions / 1.33 M blocks |
+| 🔍 **Mixed CJK/ASCII full-text search** | Per-character CJK splitting over FTS5. Median **97 ms** on a real corpus of 4 662 sessions / 1.58 M blocks |
 | 🧠 **Summaries are indexed too** | A local LLM writes one line per session, **rephrasing in conceptual terms** — which is what closes the vocabulary gap above |
 | 💬 **Ask** | Ask in plain language; the LLM rewrites its query and retries across rounds, and **shows you every query it tried**; scope it to a single project or ask across everything |
 | 🏷 **Session names** | A name you set with `/rename` takes precedence over the LLM summary — what you called it beats what a model guessed |
 | 🕘 **Timeline & transcript replay** | Grouped by project, paginated by project; filters apply here too; click through to read the original exchange, paginated for long sessions; **click “truncated” to open the original** (from disk if the file is still there, from the backup otherwise) |
-| 🧬 **Subagents linked up** | Nearly half the sessions are subagents (2 082 of 4 425 on the author's machine). Filter to main sessions only or subagents only; expand a main session to see the subagents it dispatched, and jump back from a subagent to its parent |
+| 🧬 **Subagents linked up** | Nearly half the sessions are subagents (2 245 of 4 662 on the author's machine). Filter to main sessions only or subagents only; expand a main session to see the subagents it dispatched, and jump back from a subagent to its parent |
 | 📝 **Markdown, ANSI & syntax highlighting** | Assistant output renders as Markdown; ANSI colours in command output are coloured; code and commands are syntax-highlighted (colour scheme selectable, the default follows the interface theme); mermaid diagrams render on click. One click switches the transcript back to **raw bytes** |
 | 🔗 **Shareable links** | View, query, every filter, and the session you're reading all live in the URL — send it to someone and they get the same result. The back button works too |
 | 🔌 **MCP endpoint** | Your agent can look up "how did I solve this last time" by itself |
@@ -157,7 +157,7 @@ right on the command itself.
 
 ### Subagents linked up
 
-Nearly half the sessions are subagents (2 082 of 4 425). Left alone they sit in the results
+Nearly half the sessions are subagents (2 245 of 4 662). Left alone they sit in the results
 with no way to tell them apart or filter them out. Now you can view main sessions only or subagents
 only; a main session expands to the subagents it dispatched, and a subagent links back to its parent.
 
@@ -293,10 +293,10 @@ JSON behind.
 
 ## The index is **not** a backup (that is restic's job)
 
-The index stores *derived* text, not a copy of the original. Measured: 9.8 GB of source transcripts
-became 1.18 GB of indexed text (~12%). The gap is JSONL structural overhead plus these deliberate losses:
+The index stores *derived* text, not a copy of the original. Measured: 12.0 GB of source transcripts
+became 1.49 GB of indexed text (~12%). The gap is JSONL structural overhead plus these deliberate losses:
 
-- Tool results are **truncated at 4096 bytes** (configurable) — 95 K of 1.33 M blocks were truncated
+- Tool results are **truncated at 4096 bytes** (configurable) — 135 K of 1.58 M blocks were truncated
 - Images, binaries, and reasoning traces are **not indexed**
 - The `CLAUDE.md` / `AGENTS.md` text injected into every session's first message is **stripped**
 
@@ -317,33 +317,49 @@ indexing and search work exactly as before and the backup entry points explain w
 
 Real corpus on real hardware, not a synthetic benchmark:
 
-Measured 2026-09-01 on the author's machine (historical comparison in [architecture.md](docs/architecture.md)):
+Measured 2026-09-09 on the author's machine (historical comparison in [architecture.md](docs/architecture.md)):
 
 | | |
 |---|---|
-| Sessions / blocks | 4 425 (2 336 alive, 2 089 whose source file is gone) / 1 331 761 |
-| Per source | Claude Code 3 893 · Codex 439 · Grok CLI 93 |
-| Indexed text / index size | 1.18 GB / 4.4 GB |
-| Search latency | median **53 ms**, p95 124 ms (30 queries × 3 runs) |
-| Slowest query | 958 ms — the single CJK character 的, matching hundreds of thousands of blocks |
+| Sessions / blocks | 4 662 (2 419 alive, 2 243 whose source file is gone) / 1 582 316 |
+| Per source | Claude Code 3 941 · Codex 469 · Grok CLI 252 |
+| Indexed text / index size | 1.49 GB / 4.59 GB |
+| Search latency | median **97 ms**, p95 294 ms (30 queries × 3 runs, 90 samples) |
+| Slowest query | 1 478 ms — the single CJK character 的, matching hundreds of thousands of blocks |
 | Summary throughput | median 0.8 s/session; full run took **2 h 13 min** (measured 2026-07-29, not re-run) |
 
 ## The three JSONL formats all differ (read before writing a parser)
 
 | | Claude Code | Codex | Grok CLI |
 |---|---|---|---|
-| Path | `~/.claude/projects/<slug>/<uuid>.jsonl` | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` | `~/.grok/sessions/<percent-encoded cwd>/<uuid>/chat_history.jsonl` |
-| Role lives at | `message.role` | `payload.role` (outer `type: response_item`) | top-level `type` |
-| Text field | `content` as string, or list items with `type=="text"` | list items with `type=="input_text"` | `content`; **reasoning is in `summary[].text`** |
-| Timestamps | on every record | on every record | **absent from the transcript** — taken from `events.jsonl` next to it by `tool_call_id`, the rest interpolated |
+| Path | `~/.claude/projects/<slug>/<uuid>.jsonl` | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` | `~/.grok/sessions/<percent-encoded cwd>/<uuid>/updates.jsonl` |
+| Role lives at | `message.role` | `payload.role` (outer `type: response_item`) | `params.update.sessionUpdate` |
+| Text field | `content` as string, or list items with `type=="text"` | list items with `type=="input_text"` | `content.text`, **one message split across consecutive lines** |
+| Timestamps | on every record | on every record | on every record (one `timestamp` per line) |
 | Metadata | scattered through the transcript | first line, `session_meta` | `summary.json` next to it |
-| Subagents | separate `<uuid>/subagents/agent-*.jsonl` | same file | transcript sits at the project's top level; the parent's `subagents/<uuid>/` holds only `meta.json` |
+| Subagents | separate `<uuid>/subagents/agent-*.jsonl` | same file | the structural test reads the parent's `subagents/<uuid>/`, but **the transcript is recorded in the parent's stream** |
+
+> [!IMPORTANT]
+> **For Grok the transcript is `updates.jsonl`, never the more transcript-looking
+> `chat_history.jsonl`.** Grok CLI **compacts the latter in place** — a whole stretch of history
+> is replaced by a summary under `compaction/segment_*.md`. An indexer sees the file shrink,
+> treats it as truncated and rebuilds; the behaviour is entirely correct and the original text
+> silently disappears. Measured: of the 1 279 prompts recorded in `prompt_history.jsonl`,
+> only **15%** survive in `chat_history`; 82% exist solely in `updates.jsonl`, which is the ACP
+> streaming protocol log and is append-only.
+>
+> The cost: **one message is split across consecutive chunk lines**, so they must be joined by
+> type, and the read watermark may only advance to the last completed join — otherwise a scan
+> landing mid-turn splits a message in two **permanently** (the file merely grew; there is no
+> "it shrank" signal to lean on). See decision 43 in architecture.md.
 
 > [!WARNING]
 > For Grok, whether a session is a subagent **cannot be read off `agent_name` in `summary.json`**.
 > On the corpus at hand it lines up perfectly with main/sub (41/41, 30/30) — but that is a
 > coincidence of this corpus: the field means "which agent config was running". Use the structural
-> fact instead (decision 40 in architecture.md).
+> fact instead (decision 40 in architecture.md). Also note that a subagent's **conversation
+> text is recorded in the parent's stream**; the subagent's own `updates.jsonl` carries only
+> sparse harness events.
 
 Parsers are pluggable — implement the `Parser` interface in `internal/parser` and neither the index
 nor the search layer needs to change.
@@ -367,7 +383,7 @@ closed for good; if it doesn't, it reopens and those 10 cases are what it has to
 
 ## Docs
 
-- [`docs/architecture.md`](docs/architecture.md) — architecture and 41 key decisions **with their
+- [`docs/architecture.md`](docs/architecture.md) — architecture and 44 key decisions **with their
   costs**, including the full post-mortem of a 63.8 s → 276 ms query fix
 - [`docs/deploy.md`](docs/deploy.md) — deployment, configuration, troubleshooting
 - [`docs/design-parity.md`](docs/design-parity.md) — where the UI departs from its design mock, and why

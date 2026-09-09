@@ -1,0 +1,3 @@
+{"timestamp":1700000200,"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"子代理任务"}}}}
+{"timestamp":1700000210,"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"好的。"}}}}
+{"timestamp":1700000220,"method":"_x.ai/session/update","params":{"sessionId":"s","update":{"sessionUpdate":"turn_completed","stop_reason":"end_turn"}}}

@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/cygmris/chatdex/internal/model"
@@ -15,17 +14,29 @@ import (
 // Grok 解析 Grok CLI 的会话记录。
 //
 //	~/.grok/sessions/<百分号编码的 cwd>/<session-uuid>/
-//	    chat_history.jsonl   正文
+//	    updates.jsonl        正文（ACP 流式协议日志）
+//	    chat_history.jsonl   **刻意不认**，见下
 //	    summary.json         元数据（时间、标题、摘要、cwd）
-//	    events.jsonl         事件流，每条带 ts
+//	    compaction/segment_*.md  被压缩掉那段的摘要
 //	    subagents/<uuid>/meta.json
+//
+// 🔴 **为什么正文取 updates.jsonl 而不是看起来更像正文的 chat_history.jsonl**：
+// Grok CLI 会**原地压缩** chat_history.jsonl —— 把已经过去的一整段对话换成
+// compaction/ 下的一段摘要。索引侧看到 size < offset 判为「文件被截断」而重建，
+// 行为完全正确，结果是原文静默蒸发。实测缺口：prompt_history.jsonl 记录的
+// 1279 条提问里，chat_history 只剩 196 条（15%），1054 条（82%）只存在于
+// updates.jsonl，可恢复率 99.9%。
+//
+// ⚠️ R23 的注释曾写着「updates.jsonl 与 rewind_points.jsonl 是编辑器状态与回滚点，
+// 不是对话内容」—— **那句话是错的，而且正是它让 R23 排除了唯一完整的那份记录**。
+// rewind_points.jsonl 才是回滚点；updates.jsonl 是完整的对话流。
 //
 // 与前两个来源的三处结构性差异（都由实测语料得出）：
 //
-//  1. **正文里没有任何时间字段。** 时间戳从同目录的 events.jsonl 按 tool_call_id
-//     取真值，取不到的在相邻真值间插值。这是 Parse 要收 path 的唯一理由。
-//  2. **多一个 reasoning 类型。** content 恒为 null，原文在 encrypted_content
-//     （加密不可读），能索引的只有 summary[].text —— 已经是压缩过的思考要点。
+//  1. **一条消息拆成连续多行**（流式 chunk），要按类型拼接；因此水位只能推进到
+//     最后一次 flush 处，否则扫描落在一轮中间会把消息**永久**切成两块。
+//  2. **多一个 reasoning 类型**（agent_thought_chunk）。这里是明文，与 R23 时代
+//     chat_history 里那个 content 恒为 null、原文加密的 reasoning 不是一回事。
 //  3. **子代理正文只在项目目录顶层存一份**，subagents/<uuid>/ 下只有 meta.json，
 //     所以扫顶层即可，不会重复索引。
 type Grok struct{ Home string }
@@ -36,10 +47,8 @@ func (g Grok) root() string { return filepath.Join(g.Home, ".grok", "sessions") 
 
 func (g Grok) Roots() []string { return []string{g.root()} }
 
-// grokTranscript 是正文文件名。整个解析器只认这一个文件：
-// 同目录下 updates.jsonl（单会话可达 22 MB）与 rewind_points.jsonl 是编辑器状态
-// 与回滚点，不是对话内容；system_prompt.txt 是工具的提示词不是使用者的会话。
-const grokTranscript = "chat_history.jsonl"
+// grokTranscript 是正文文件名。整个解析器只认这一个文件。
+const grokTranscript = "updates.jsonl"
 
 func (g Grok) Match(path string) bool {
 	return filepath.Base(path) == grokTranscript &&
@@ -60,27 +69,66 @@ type grokSummary struct {
 	UpdatedAt      string `json:"updated_at"`
 }
 
-// grokMessage 是 chat_history.jsonl 的一行。
-type grokMessage struct {
-	Type       string          `json:"type"`
-	Content    json.RawMessage `json:"content"`
-	Summary    json.RawMessage `json:"summary"`
-	ToolCallID string          `json:"tool_call_id"`
-	ToolCalls  []struct {
-		ID       string `json:"id"`
-		Function struct {
-			Name      string `json:"name"`
-			Arguments string `json:"arguments"`
-		} `json:"function"`
-	} `json:"tool_calls"`
+// grokUpdate 是 updates.jsonl 的一行。
+//
+// method 有 "session/update" 与 "_x.ai/session/update" 两种，**都要收**
+// （turn_completed 只出现在后者）。判据一律用 update.sessionUpdate，不用 method。
+type grokUpdate struct {
+	Timestamp int64 `json:"timestamp"`
+	Params    struct {
+		Update struct {
+			SessionUpdate string          `json:"sessionUpdate"`
+			Content       json.RawMessage `json:"content"`
+			ToolCallID    string          `json:"toolCallId"`
+			Title         string          `json:"title"`
+			Status        string          `json:"status"`
+			RawInput      json.RawMessage `json:"rawInput"`
+			RawOutput     json.RawMessage `json:"rawOutput"`
+			Meta          struct {
+				Tool struct {
+					Name string `json:"name"`
+				} `json:"x.ai/tool"`
+			} `json:"_meta"`
+		} `json:"update"`
+	} `json:"params"`
 }
 
-// grokIgnorable 是不产内容块的消息类型。
+// grokChunkKind 是「要累积成正文」的三种 chunk 及其对应的块类型。
+var grokChunkKind = map[string]model.Kind{
+	"user_message_chunk":  model.KindUser,
+	"agent_message_chunk": model.KindAssistant,
+	"agent_thought_chunk": model.KindReasoning,
+}
+
+// grokIgnorable 是不产内容块的 sessionUpdate 类型。
 //
-// system 是工具的提示词，不是使用者的会话；backend_tool_call 实测可读文本为 0。
+// turn_completed 在别处单独处理（它要触发 flush），不列在这里。
+//
+// 这份清单**全部来自实测**，不是猜的：先只列样本里见过的几种，跑一次全量索引
+// （247 个会话 / 1.0 GB），再按 `grok: 未知 sessionUpdate 类型` 的告警补齐。
+// 实测该轮告警 1501 条、10 个类型，就是下面第二组。
+// 未列出的类型仍会告警并跳过 —— Grok CLI 在演进，新类型必然出现，
+// 告警是发现它们的唯一入口，所以不要用通配把这条路堵死。
 var grokIgnorable = map[string]bool{
-	"system":            true,
-	"backend_tool_call": true,
+	// 第一组：设计阶段从样本里量到的
+	"hook_execution":    true,
+	"plan":              true,
+	"goal_updated":      true,
+	"task_backgrounded": true,
+	"task_completed":    true,
+	"retry_state":       true,
+
+	// 第二组：全量索引后按告警补齐（括号内是那一轮的条数）
+	"hook_annotation":        true, // 422
+	"session_recap":          true, // 202
+	"subagent_spawned":       true, // 198
+	"subagent_finished":      true, // 198
+	"auto_compact_started":   true, // 157
+	"compaction_checkpoint":  true, // 151
+	"auto_compact_completed": true, // 151
+	"current_mode_update":    true, // 10
+	"auto_compact_cancelled": true, // 5
+	"image_dropped":          true, // 4
 }
 
 func (g Grok) Meta(path string) (model.SessionMeta, error) {
@@ -198,82 +246,106 @@ func fmtSscanHex(s string, v *int) (int, error) {
 
 var errNotHex = os.ErrInvalid
 
-// grokTimes 是从 events.jsonl 取到的 tool_call_id → unix 秒。
-type grokTimes map[string]int64
-
-// readGrokEvents 建 tool_call_id → ts 映射。
-//
-// 实测：chat_history 里的 tool id 在 events 里**100% 找得到**带 ts 的记录，
-// 而 tool_result 占块数的 55% —— 所以超过一半的块拿得到**真时间戳**，
-// 其余的插值段落跨不过一次工具调用。
-//
-// 代价：全量 events.jsonl 合计 53.4 MB，只有 chat_history 的 1.1 倍。
-func readGrokEvents(dir string) grokTimes {
-	f, err := os.Open(filepath.Join(dir, "events.jsonl")) // 只读
-	if err != nil {
-		return nil
-	}
-	defer f.Close()
-
-	out := grokTimes{}
-	var rec struct {
-		TS         string `json:"ts"`
-		ToolCallID string `json:"tool_call_id"`
-		CallID     string `json:"call_id"`
-	}
-	_, _ = scanLines(f, 0, func(line []byte) error {
-		rec = struct {
-			TS         string `json:"ts"`
-			ToolCallID string `json:"tool_call_id"`
-			CallID     string `json:"call_id"`
-		}{}
-		if json.Unmarshal(line, &rec) != nil || rec.TS == "" {
-			return nil
-		}
-		id := rec.ToolCallID
-		if id == "" {
-			id = rec.CallID
-		}
-		if id == "" {
-			return nil
-		}
-		if ts := parseTime(rec.TS); ts > 0 {
-			// 同一个 id 可能有 started / completed 两条，取最早的那个
-			if old, ok := out[id]; !ok || ts < old {
-				out[id] = ts
-			}
-		}
-		return nil
-	})
-	return out
+// grokAcc 是正在累积的一条消息。流式 chunk 一行一片，要拼回一条。
+type grokAcc struct {
+	kind    model.Kind
+	body    strings.Builder
+	ts      int64
+	startAt int64 // 这条消息**第一行**的偏移量，决定水位能推到哪
+	live    bool
 }
 
 func (g Grok) Parse(r io.Reader, path string, start Cursor, emit func(model.Block) error) (Cursor, error) {
 	cur := start
-	dir := filepath.Dir(path)
-	times := readGrokEvents(dir)
-	sum, _ := readGrokSummary(dir)
-	lo, hi := parseTime(sum.CreatedAt), parseTime(sum.LastActiveAt)
+	sum, _ := readGrokSummary(filepath.Dir(path))
 
-	// 先全部收进来再统一定时间：插值需要知道后一个真时间戳在哪，
-	// 而那要读到后面的行才知道。会话最大 1.3 MB，一次性收下没有压力。
-	var pending []model.Block
-	var known []int // pending 里拿到真时间戳的下标
+	var acc grokAcc
+	var lastTS int64
 
-	off, err := scanLines(r, start.Offset, func(line []byte) error {
-		var msg grokMessage
-		if json.Unmarshal(line, &msg) != nil {
+	// out 发一个块并推进序号。边读边发，不再把整份 blocks 收进内存——
+	// 实测最大的一个会话过滤截断后仍有 51.8 MB / 38421 块。
+	out := func(b model.Block) error {
+		b.Seq = cur.Seq
+		cur.Seq++
+		return emit(b)
+	}
+	flush := func() error {
+		if !acc.live {
+			return nil
+		}
+		body := strings.TrimSpace(acc.body.String())
+		k, ts := acc.kind, acc.ts
+		acc = grokAcc{}
+		if body == "" {
+			return nil
+		}
+		return out(model.Block{Kind: k, TS: ts, Body: body})
+	}
+
+	off, err := scanLinesAt(r, start.Offset, func(line []byte, at int64) error {
+		var rec grokUpdate
+		if json.Unmarshal(line, &rec) != nil {
 			cur.Skipped++
 			return nil
 		}
-		if grokIgnorable[msg.Type] {
+		u := rec.Params.Update
+		// 缺 timestamp 时沿用上一个已知值——**不回退到插值**，那套已随本次改动删除。
+		ts := rec.Timestamp
+		if ts > 0 {
+			lastTS = ts
+		} else {
+			ts = lastTS
+		}
+
+		if k, ok := grokChunkKind[u.SessionUpdate]; ok {
+			if acc.live && acc.kind != k {
+				if err := flush(); err != nil {
+					return err
+				}
+			}
+			if !acc.live {
+				acc.kind, acc.ts, acc.startAt, acc.live = k, ts, at, true
+			}
+			acc.body.WriteString(grokText(u.Content))
 			return nil
 		}
-		for _, b := range g.blocks(msg, times) {
-			if b.TS > 0 {
-				known = append(known, len(pending))
+
+		switch u.SessionUpdate {
+		case "turn_completed":
+			return flush()
+
+		case "tool_call":
+			if err := flush(); err != nil {
+				return err
 			}
-			pending = append(pending, b)
+			name := u.Meta.Tool.Name
+			if name == "" {
+				name = u.Title
+			}
+			return out(model.Block{
+				Kind: model.KindToolUse, ToolName: name, ToolUseID: u.ToolCallID,
+				TS: ts, Body: string(u.RawInput),
+			})
+
+		case "tool_call_update":
+			// 🔴 靠有无 status 分流。实测 28664 条里 14307 条没有 status
+			// （那是进度更新，携带的是 rawInput 的回显），14357 条有
+			// （completed 14211 / failed 146）。不分流会把每个工具结果记两遍，
+			// 且其中一遍是输入不是输出。
+			if u.Status == "" {
+				return nil
+			}
+			if err := flush(); err != nil {
+				return err
+			}
+			return out(model.Block{
+				Kind: model.KindToolResult, ToolUseID: u.ToolCallID,
+				TS: ts, Body: string(u.RawOutput),
+			})
+		}
+
+		if !grokIgnorable[u.SessionUpdate] {
+			slog.Warn("grok: 未知 sessionUpdate 类型，已跳过", "type", u.SessionUpdate)
 		}
 		return nil
 	})
@@ -281,139 +353,39 @@ func (g Grok) Parse(r io.Reader, path string, start Cursor, emit func(model.Bloc
 		return cur, err
 	}
 
-	fillGrokTimes(pending, known, lo, hi)
-	for i := range pending {
-		pending[i].Seq = cur.Seq
-		cur.Seq++
-		if e := emit(pending[i]); e != nil {
-			return cur, e
-		}
-	}
+	// 🔴 水位只推到「当前这条未完结消息的起点」，不是文件末尾。
+	//
+	// 扫描随时可能落在一轮对话中间。若水位推到末尾，累积到一半的那条消息会
+	// 被当成完整消息发出去，而下一轮从新水位开始读剩下的半条——两块**永久**
+	// 接不回来。宁可每轮重读几 KB。其余两个来源一行一条消息，没有这个问题，
+	// 所以代码里找不到先例。
 	cur.Offset = off
+	if acc.live {
+		cur.Offset = acc.startAt
+	}
 	if sum.GeneratedTitle != "" {
 		cur.Title = sum.GeneratedTitle
 	}
 	return cur, nil
 }
 
-// blocks 把一条消息展开成若干内容块。
-func (g Grok) blocks(msg grokMessage, times grokTimes) []model.Block {
-	var out []model.Block
-	switch msg.Type {
-	case "user", "assistant":
-		if txt := grokText(msg.Content); txt != "" {
-			k := model.KindUser
-			if msg.Type == "assistant" {
-				k = model.KindAssistant
-			}
-			out = append(out, model.Block{Kind: k, Body: txt})
-		}
-	case "reasoning":
-		// ⚠️ 正文在 summary[].text，**不是 content** —— content 恒为 null，
-		// 原文在 encrypted_content 里且加密不可读。只量 content 会得出
-		// 「reasoning 是空的」这个错误结论。
-		if txt := grokText(msg.Summary); txt != "" {
-			out = append(out, model.Block{Kind: model.KindReasoning, Body: txt})
-		}
-	case "tool_result":
-		out = append(out, model.Block{
-			Kind: model.KindToolResult, ToolUseID: msg.ToolCallID,
-			TS: times[msg.ToolCallID], Body: grokText(msg.Content),
-		})
-	default:
-		slog.Warn("grok: 未知消息类型，已跳过", "type", msg.Type)
-	}
-	// 工具调用挂在 assistant 消息上，单独成块
-	for _, tc := range msg.ToolCalls {
-		out = append(out, model.Block{
-			Kind: model.KindToolUse, ToolName: tc.Function.Name, ToolUseID: tc.ID,
-			TS: times[tc.ID], Body: tc.Function.Arguments,
-		})
-	}
-	return out
-}
-
-// grokText 从 content / summary 里抽出可读文本。
+// grokText 从一个 chunk 的 content 字段里取出文本。
 //
-// 两种形状都要认：字符串，或 [{type, text}] 数组。
+// 实测形状恒为 {"type":"text","text":"…"}。另兼容裸字符串——代价一行，
+// 而 ACP 是演进中的协议，这个字段换形状不会有任何报错，只会静默变成空正文。
 func grokText(raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return ""
 	}
+	var obj struct {
+		Text string `json:"text"`
+	}
+	if json.Unmarshal(raw, &obj) == nil && obj.Text != "" {
+		return obj.Text
+	}
 	var s string
 	if json.Unmarshal(raw, &s) == nil {
-		return strings.TrimSpace(s)
+		return s
 	}
-	var items []struct {
-		Text    string `json:"text"`
-		Content string `json:"content"`
-	}
-	if json.Unmarshal(raw, &items) != nil {
-		return ""
-	}
-	var parts []string
-	for _, it := range items {
-		if it.Text != "" {
-			parts = append(parts, it.Text)
-		} else if it.Content != "" {
-			parts = append(parts, it.Content)
-		}
-	}
-	return strings.TrimSpace(strings.Join(parts, "\n"))
-}
-
-// fillGrokTimes 给没拿到真时间戳的块补时间。
-//
-// 🔴 **补出来的是推导值，不是原始记录。** Grok 的正文里根本没有每条消息的时间，
-// 这些数是「夹在前后两个真时间戳之间按序均分」算出来的 —— 与 Claude/Codex 的
-// ts 不是同一种东西，别把它当成会话里真实发生的时刻。
-//
-// 之所以还值得算：时间线与日期过滤只需要「落在正确的那一天」，而实测
-// tool_result 占 55% 且 tool id 100% 能对上，插值段落跨不过一次工具调用。
-func fillGrokTimes(blocks []model.Block, known []int, lo, hi int64) {
-	if len(blocks) == 0 {
-		return
-	}
-	if len(known) == 0 {
-		// 一个真时间戳都没有：整段在会话起止之间均分
-		spread(blocks, 0, len(blocks)-1, lo, hi)
-		return
-	}
-	sort.Ints(known)
-	// 头部：第一个真值之前
-	if first := known[0]; first > 0 {
-		spread(blocks, 0, first-1, lo, blocks[first].TS)
-	}
-	// 中间：每两个真值之间
-	for i := 0; i+1 < len(known); i++ {
-		a, b := known[i], known[i+1]
-		if b-a > 1 {
-			spread(blocks, a+1, b-1, blocks[a].TS, blocks[b].TS)
-		}
-	}
-	// 尾部：最后一个真值之后
-	if last := known[len(known)-1]; last < len(blocks)-1 {
-		spread(blocks, last+1, len(blocks)-1, blocks[last].TS, hi)
-	}
-}
-
-// spread 把 [from, to] 这段的时间在 (lo, hi] 之间均分。
-func spread(blocks []model.Block, from, to int, lo, hi int64) {
-	if from > to {
-		return
-	}
-	if lo <= 0 {
-		lo = hi
-	}
-	if hi <= 0 {
-		hi = lo
-	}
-	n := int64(to - from + 2)
-	step := int64(0)
-	if hi > lo && n > 0 {
-		step = (hi - lo) / n
-	}
-	for i := from; i <= to; i++ {
-		blocks[i].TS = lo + step*int64(i-from+1)
-	}
+	return ""
 }

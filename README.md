@@ -35,12 +35,12 @@
 
 | | |
 |---|---|
-| 🔍 **中英混合全文检索** | CJK 单字切分 + FTS5，中位 **53 ms**（4425 个会话、133 万个内容块的真实语料） |
+| 🔍 **中英混合全文检索** | CJK 单字切分 + FTS5，中位 **97 ms**（4662 个会话、158 万个内容块的真实语料） |
 | 🧠 **摘要也能被搜到** | 本地 LLM 给每个会话写一句话摘要。摘要用的是概念词，所以你凭印象搜也搜得到——上面那条「记的词和原文对不上」就是这么填平的 |
 | 💬 **问一问** | 用大白话提问，LLM 多轮改写查询自己重试，并**把每一轮搜了什么都摊开给你看**；可限定在某个项目内问，也可全库问 |
 | 🏷 **会话名** | 你 `/rename` 起的名字优先于 LLM 摘要显示——人写的比机器猜的可信 |
 | 🕘 **时间线与会话回读** | 按项目聚合、按项目翻页；筛选条件同样生效；点进去逐条回读原始对话，长会话分页；**「已截断」可点开看原件**（源文件还在读磁盘，没了走备份） |
-| 🧬 **子代理串起来** | 近一半会话是子代理（作者机器上 4425 个里有 2082 个）。可以只看主会话、只看子代理；主会话能展开它派出去的子代理，子代理能一键跳回主会话 |
+| 🧬 **子代理串起来** | 近一半会话是子代理（作者机器上 4662 个里有 2245 个）。可以只看主会话、只看子代理；主会话能展开它派出去的子代理，子代理能一键跳回主会话 |
 | 📝 **Markdown / ANSI / 语法高亮** | assistant 输出按 Markdown 显示，命令输出的颜色码正确上色，代码与命令有语法高亮（配色可选，默认跟随界面主题）；mermaid 图点一下才渲染；回读页可一键切回**原文**看原始字节 |
 | 🔗 **可分享的链接** | 视图、检索词、全部过滤条件、正在读的会话都在 URL 里——发给别人能还原同样的结果，后退键也照常用 |
 | 🔌 **MCP 端点** | agent 可以自己查「我上次是怎么解决这个的」 |
@@ -140,7 +140,7 @@ ollama pull qwen2.5:7b-instruct
 
 ### 子代理串起来
 
-近一半的会话是子代理（4425 个里有 2082 个）。它们混在结果里，既看不出身份也筛不掉。
+近一半的会话是子代理（4662 个里有 2245 个）。它们混在结果里，既看不出身份也筛不掉。
 现在可以只看主会话或只看子代理；主会话能展开它派出去的子代理，子代理能一键跳回主会话。
 
 ![子代理](docs/images/subagents.png)
@@ -265,10 +265,10 @@ snapshots 必须最后传，跑完逐文件校验 —— **copy 退 0 不等于�
 
 ## 索引库**不是**备份（备份是 restic 的活）
 
-索引库存的是**派生文本**，不是原文副本。实测：原始会话 9.8 GB，入库正文 1.18 GB（约 12%）。
+索引库存的是**派生文本**，不是原文副本。实测：原始会话 12.0 GB，入库正文 1.49 GB（约 12%）。
 差额来自 JSONL 结构开销，以及这些刻意的取舍：
 
-- 工具结果**按 4096 字节截断**（可配）——实测 133 万块里有 9.5 万块被截
+- 工具结果**按 4096 字节截断**（可配）——实测 158 万块里有 13.5 万块被截
 - 图片、二进制、思考过程等**不入库**
 - 每个会话首条消息里注入的 `CLAUDE.md` / `AGENTS.md` 全文**被剥离**
 
@@ -286,31 +286,42 @@ chatdex **不做 restic 的壳子**：不做定时调度（那是 systemd timer 
 
 真实语料、真实机器，不是合成基准：
 
-2026-09-01 在作者机器上测的（历史对照见 [architecture.md](docs/architecture.md)）：
+2026-09-09 在作者机器上测的（历史对照见 [architecture.md](docs/architecture.md)）：
 
 | | |
 |---|---|
-| 会话 / 内容块 | 4 425（存活 2 336 · 源已消失 2 089）/ 1 331 761 |
-| 三个来源各占多少 | Claude Code 3 893 · Codex 439 · Grok CLI 93 |
-| 入库正文 / 索引库 | 1.18 GB / 4.4 GB |
-| 检索延迟 | 中位 **53 ms** · p95 124 ms（30 个词各跑 3 轮） |
-| 最慢查询 | 958 ms——单个 CJK 常用字「的」，命中几十万块的退化情形 |
+| 会话 / 内容块 | 4 662（存活 2 419 · 源已消失 2 243）/ 1 582 316 |
+| 三个来源各占多少 | Claude Code 3 941 · Codex 469 · Grok CLI 252 |
+| 入库正文 / 索引库 | 1.49 GB / 4.59 GB |
+| 检索延迟 | 中位 **97 ms** · p95 294 ms（30 个词各跑 3 轮，90 次采样） |
+| 最慢查询 | 1 478 ms——单个 CJK 常用字「的」，命中几十万块的退化情形 |
 | 摘要吞吐 | 中位 0.8 s/会话，全量 2 小时 13 分跑完（**2026-07-29 那次的记录，这回没重跑**） |
 
 ## 三套 JSONL 格式各不相同（写解析器前必读）
 
 | | Claude Code | Codex | Grok CLI |
 |---|---|---|---|
-| 路径 | `~/.claude/projects/<slug>/<uuid>.jsonl` | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` | `~/.grok/sessions/<百分号编码的 cwd>/<uuid>/chat_history.jsonl` |
-| 角色字段 | `message.role` | `payload.role`（外层 `type: response_item`） | 顶层 `type` |
-| 文本字段 | `content` 为 str，或 list 中 `type=="text"` | list 中 `type=="input_text"` | `content`；**思考在 `summary[].text`** |
-| 时间戳 | 每条自带 | 每条自带 | **正文里没有**，从同目录 `events.jsonl` 按 `tool_call_id` 取，其余插值 |
+| 路径 | `~/.claude/projects/<slug>/<uuid>.jsonl` | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` | `~/.grok/sessions/<百分号编码的 cwd>/<uuid>/updates.jsonl` |
+| 角色字段 | `message.role` | `payload.role`（外层 `type: response_item`） | `params.update.sessionUpdate` |
+| 文本字段 | `content` 为 str，或 list 中 `type=="text"` | list 中 `type=="input_text"` | `content.text`，**一条消息拆成连续多行** |
+| 时间戳 | 每条自带 | 每条自带 | 每条自带（每行一个 `timestamp`） |
 | 元数据 | 散在正文里 | 首行 `session_meta` | 同目录 `summary.json` |
-| 子代理 | 另存 `<uuid>/subagents/agent-*.jsonl` | 同文件内 | 正文在项目目录顶层，父会话的 `subagents/<uuid>/` 只留 `meta.json` |
+| 子代理 | 另存 `<uuid>/subagents/agent-*.jsonl` | 同文件内 | 结构判据看父会话的 `subagents/<uuid>/`，但**正文记在父会话的流里** |
+
+🔴 **Grok 的正文只能取 `updates.jsonl`，不能取看起来更像正文的 `chat_history.jsonl`。**
+后者会被 Grok CLI **原地压缩**——整段历史换成 `compaction/segment_*.md` 的一段摘要。
+索引侧看到文件变小，按「被截断」重建，行为完全正确，而原文就此静默消失。
+实测：`prompt_history.jsonl` 记录的 1 279 条提问里，`chat_history` 只剩 **15%**，
+82% 只存在于 `updates.jsonl`。`updates.jsonl` 是 ACP 流式协议日志，只增不减。
+
+⚠️ 代价是**一条消息拆成连续多行 chunk**，要按类型拼接，且水位只能推进到最后一次
+拼接完结处——否则扫描落在一轮对话中间会把消息**永久**切成两块（文件只是变长，
+没有「变小」那样的信号可依赖，见 architecture 决策 43）。
 
 ⚠️ Grok 的「是不是子代理」**不能看 `summary.json` 的 `agent_name`**——
 实测它与主/子完全对应（41/41、30/30），但那是语料的巧合：它的语义是
 「哪个 agent 配置在跑」。判据要用结构事实（见 architecture 决策 40）。
+另注意子代理的**对话正文记在父会话的流里**，子代理自己那份只有稀疏的 harness 事件。
 
 解析器可插拔——在 `internal/parser` 里实现 `Parser` 接口即可，索引与检索都不用碰。
 
@@ -330,7 +341,7 @@ chatdex **不做 restic 的壳子**：不做定时调度（那是 systemd timer 
 
 ## 文档
 
-- [`docs/architecture.md`](docs/architecture.md) —— 架构与 41 个关键决策**及它们的代价**，
+- [`docs/architecture.md`](docs/architecture.md) —— 架构与 44 个关键决策**及它们的代价**，
   含 63.8 s → 276 ms 那次查询性能事故的完整归因
 - [`docs/deploy.md`](docs/deploy.md) —— 部署、配置、排查
 - [`docs/design-parity.md`](docs/design-parity.md) —— 界面与设计稿的逐条差异及原因

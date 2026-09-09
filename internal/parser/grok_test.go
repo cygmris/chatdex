@@ -3,6 +3,7 @@ package parser
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/cygmris/chatdex/internal/model"
@@ -76,83 +77,131 @@ func TestGrokMetaComesFromSummaryJSON(t *testing.T) {
 	}
 }
 
-// reasoning 的正文在 summary[].text，**不是 content**。
+// 连续同类 chunk 拼成**一块**，遇类型变化断开。
 //
-// content 恒为 null、原文在 encrypted_content 里且加密不可读。只看 content
-// 会得出「reasoning 是空的」这个错误结论 —— 规划阶段实测时就差点这么判。
-func TestGrokReasoningReadsSummaryNotContent(t *testing.T) {
+// 这是 updates.jsonl 与前两个来源最根本的差别：一条消息拆成连续多行。
+// 不拼接的话，「帮我查一下昨天的备份」会变成两条谁也搜不到的碎片。
+func TestGrokConsecutiveChunksMergeIntoOneBlock(t *testing.T) {
 	blocks, _, _ := grokParse(t, grokMain)
 
-	var reasoning []model.Block
+	var users []model.Block
 	for _, b := range blocks {
-		if b.Kind == model.KindReasoning {
-			reasoning = append(reasoning, b)
+		if b.Kind == model.KindUser {
+			users = append(users, b)
 		}
 	}
-	if len(reasoning) == 0 {
-		t.Fatal("一条 reasoning 块都没有 —— testdata 里明明有两条 reasoning 消息")
+	if len(users) != 2 {
+		t.Fatalf("user 块 = %d 个，想要 2（「帮我查一下昨天的备份」拼成一块 + 「没有了」）：%+v", len(users), users)
 	}
-	for _, b := range reasoning {
-		if b.Body == "" {
-			t.Error("reasoning 块正文为空 —— 说明读的是 content（恒 null）而不是 summary[].text")
+	if users[0].Body != "帮我查一下昨天的备份" {
+		t.Errorf("第一条 user = %q，想要「帮我查一下昨天的备份」—— 两行 chunk 应拼成一块", users[0].Body)
+	}
+	// 类型变化断开：thought 与后面的 agent_message 不能糊在一起
+	for _, b := range blocks {
+		if b.Kind == model.KindReasoning && strings.Contains(b.Body, "我去查快照") {
+			t.Errorf("reasoning 块吞掉了后面的 assistant 正文：%q —— 类型变化时没断开", b.Body)
 		}
 	}
 }
 
-// system 与 backend_tool_call 不产块：前者是工具的提示词不是会话，后者实测无可读文本。
-func TestGrokSkipsNonConversationTypes(t *testing.T) {
+// turn_completed 断开累积。
+//
+// 两条 agent_message 中间隔着一个 turn_completed，必须是两块。
+// 若只按「类型变化」断开，它们会被拼成一块，而那是两轮对话的回答。
+func TestGrokTurnCompletedBreaksAccumulator(t *testing.T) {
+	blocks, _, _ := grokParse(t, grokMain)
+
+	var assistants []string
+	for _, b := range blocks {
+		if b.Kind == model.KindAssistant {
+			assistants = append(assistants, b.Body)
+		}
+	}
+	if len(assistants) != 3 {
+		t.Fatalf("assistant 块 = %d 个，想要 3（「我去查快照。」/「一共三个快照。」/「还需要别的吗？」）：%q", len(assistants), assistants)
+	}
+	if assistants[1] != "一共三个快照。" || assistants[2] != "还需要别的吗？" {
+		t.Errorf("assistant 块 = %q —— 后两条被 turn_completed 隔开，不该拼在一起", assistants)
+	}
+}
+
+// 🔴 tool_call_update 靠**有无 status** 分流。
+//
+// 实测真实语料里 28664 条 tool_call_update，14307 条没有 status（那是进度更新，
+// 携带的是 rawInput 的回显），14357 条有（completed/failed）。不分流会把每个
+// 工具结果记两遍，且其中一遍是输入不是输出 —— 而两遍都能搜到，看不出异常。
+func TestGrokToolCallUpdateSplitsOnStatus(t *testing.T) {
+	blocks, _, _ := grokParse(t, grokMain)
+
+	var uses, results []model.Block
+	for _, b := range blocks {
+		switch b.Kind {
+		case model.KindToolUse:
+			uses = append(uses, b)
+		case model.KindToolResult:
+			results = append(results, b)
+		}
+	}
+	if len(uses) != 1 {
+		t.Fatalf("tool_use 块 = %d 个，想要 1：%+v", len(uses), uses)
+	}
+	// testdata 里 call-1 有两条 tool_call_update：一条无 status（进度）、一条有（结果）
+	if len(results) != 1 {
+		t.Fatalf("tool_result 块 = %d 个，想要 1 —— 无 status 的那条是进度更新，不该产块：%+v",
+			len(results), results)
+	}
+	if !strings.Contains(results[0].Body, "3 snapshots") {
+		t.Errorf("tool_result 正文 = %q，想要含 rawOutput 的 stdout", results[0].Body)
+	}
+	if strings.Contains(results[0].Body, "restic snapshots") {
+		t.Errorf("tool_result 正文 = %q —— 这是 rawInput 的回显，说明取错了字段", results[0].Body)
+	}
+	if uses[0].ToolName != "run_terminal_command" {
+		t.Errorf("ToolName = %q，想要 run_terminal_command（取自 _meta.\"x.ai/tool\".name）", uses[0].ToolName)
+	}
+	if uses[0].ToolUseID != "call-1" || results[0].ToolUseID != "call-1" {
+		t.Errorf("toolCallId 没对上：use=%q result=%q", uses[0].ToolUseID, results[0].ToolUseID)
+	}
+}
+
+// 时间戳直取每行的 timestamp；缺失时沿用上一个已知值，**不插值**。
+func TestGrokTimestampsAreVerbatim(t *testing.T) {
+	blocks, _, _ := grokParse(t, grokMain)
+
+	for _, b := range blocks {
+		if b.TS == 0 {
+			t.Errorf("%s 块没有时间戳：%q", b.Kind, b.Body)
+		}
+	}
+	// 第一条 user 起于第一行 chunk，时间戳应当**逐字**等于那一行的 1700000020
+	for _, b := range blocks {
+		if b.Kind == model.KindUser && b.Body == "帮我查一下昨天的备份" {
+			if b.TS != 1700000020 {
+				t.Errorf("TS = %d，想要 1700000020（逐字取自该消息第一行）", b.TS)
+			}
+		}
+		// testdata 里「没有了」那一行**故意没有 timestamp**，应沿用上一个已知值
+		if b.Kind == model.KindUser && b.Body == "没有了" {
+			if b.TS != 1700000090 {
+				t.Errorf("缺 timestamp 的块 TS = %d，想要 1700000090（沿用上一个已知值）", b.TS)
+			}
+		}
+	}
+}
+
+// 未知 sessionUpdate 类型不产块、也不报错 —— Grok CLI 在演进，新类型必然出现。
+func TestGrokUnknownTypeProducesNoBlock(t *testing.T) {
 	blocks, _, _ := grokParse(t, grokMain)
 	for _, b := range blocks {
-		if b.Kind != model.KindUser && b.Kind != model.KindAssistant &&
-			b.Kind != model.KindReasoning && b.Kind != model.KindToolUse &&
-			b.Kind != model.KindToolResult {
+		if strings.Contains(b.Body, "不该产块") {
+			t.Errorf("未知 sessionUpdate 类型产出了块：%+v", b)
+		}
+		switch b.Kind {
+		case model.KindUser, model.KindAssistant, model.KindReasoning,
+			model.KindToolUse, model.KindToolResult:
+		default:
 			t.Errorf("出现了不该有的块类型：%q", b.Kind)
 		}
-		if b.Body == "" && b.Kind != model.KindToolUse {
-			t.Errorf("%s 块正文为空", b.Kind)
-		}
-	}
-}
-
-// 工具块拿到的必须是 events.jsonl 里的**真时间戳**，不是插值。
-//
-// 配了对照：把 events.jsonl 移走之后，同一个块只能落到插值，
-// 两者必须不同 —— 否则这条断言证明不了「真值优先」真的在起作用。
-func TestGrokToolBlocksUseRealTimestampsFromEvents(t *testing.T) {
-	blocks, _, _ := grokParse(t, grokMain)
-
-	var withReal int
-	for _, b := range blocks {
-		if b.Kind == model.KindToolResult || b.Kind == model.KindToolUse {
-			if b.TS == 0 {
-				t.Errorf("工具块没有时间戳：%+v", b.ToolUseID)
-			}
-			withReal++
-		}
-	}
-	if withReal == 0 {
-		t.Fatal("一个工具块都没有 —— testdata 取样坏了，下面的对照失去意义")
-	}
-
-	// 对照：events.jsonl 不在时，同一批块的时间戳应当改变（落到插值）
-	g := Grok{Home: grokHome(t)}
-	dir := filepath.Join(g.root(), "%2Ftmp%2Fdemo", grokMain)
-	ev := filepath.Join(dir, "events.jsonl")
-	hidden := ev + ".hidden"
-	if err := os.Rename(ev, hidden); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Rename(hidden, ev) })
-
-	noEvents, _, _ := grokParse(t, grokMain)
-	same := 0
-	for i := range blocks {
-		if i < len(noEvents) && blocks[i].TS == noEvents[i].TS {
-			same++
-		}
-	}
-	if same == len(blocks) {
-		t.Error("移走 events.jsonl 后时间戳一个都没变 —— 说明根本没在用 events 里的真值")
 	}
 }
 
@@ -184,21 +233,23 @@ func TestGrokSubagentIsDetectedByStructureNotAgentName(t *testing.T) {
 	}
 }
 
-// Match 只认 chat_history.jsonl —— 同目录下 updates.jsonl（单会话可达 22 MB）
-// 与 rewind_points.jsonl 是编辑器状态，不是对话内容。
+// 🔴 Match 只认 updates.jsonl，**刻意不认 chat_history.jsonl**。
+//
+// 后者会被 Grok CLI 原地压缩，索引它等于让内容随压缩静默消失
+// —— 这正是本次改造要根治的缺陷，不是一个可以「顺手也支持一下」的选项。
 func TestGrokMatchOnlyTranscript(t *testing.T) {
 	g := Grok{Home: grokHome(t)}
 	base := filepath.Join(g.root(), "%2Ftmp%2Fdemo", grokMain)
-	for _, name := range []string{"updates.jsonl", "rewind_points.jsonl", "events.jsonl", "summary.json"} {
+	for _, name := range []string{"chat_history.jsonl", "rewind_points.jsonl", "events.jsonl", "summary.json"} {
 		if g.Match(filepath.Join(base, name)) {
-			t.Errorf("Match 认了 %s —— 它不是对话正文", name)
+			t.Errorf("Match 认了 %s —— 正文只在 updates.jsonl", name)
 		}
 	}
 	if !g.Match(filepath.Join(base, grokTranscript)) {
-		t.Error("Match 不认 chat_history.jsonl")
+		t.Error("Match 不认 updates.jsonl")
 	}
 	// 根目录之外的同名文件不算
-	if g.Match("/tmp/elsewhere/chat_history.jsonl") {
+	if g.Match("/tmp/elsewhere/updates.jsonl") {
 		t.Error("Match 认了根目录之外的同名文件")
 	}
 }

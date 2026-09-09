@@ -1,0 +1,15 @@
+{"timestamp":1700000010,"method":"session/update","params":{"sessionId":"m","update":{"sessionUpdate":"hook_execution","event_name":"session_start","runs":[]}}}
+{"timestamp":1700000020,"method":"session/update","params":{"sessionId":"m","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"帮我查一下"}}}}
+{"timestamp":1700000021,"method":"session/update","params":{"sessionId":"m","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"昨天的备份"}}}}
+{"timestamp":1700000030,"method":"session/update","params":{"sessionId":"m","update":{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"先看快照列表。"}}}}
+{"timestamp":1700000040,"method":"session/update","params":{"sessionId":"m","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"我去查快照。"}}}}
+{"timestamp":1700000050,"method":"session/update","params":{"sessionId":"m","update":{"sessionUpdate":"tool_call","toolCallId":"call-1","title":"Execute `restic snapshots`","rawInput":{"command":"restic snapshots"},"_meta":{"x.ai/tool":{"name":"run_terminal_command"}}}}}
+{"timestamp":1700000051,"method":"session/update","params":{"sessionId":"m","update":{"sessionUpdate":"tool_call_update","toolCallId":"call-1","kind":"execute","title":"Execute `restic snapshots`","rawInput":{"command":"restic snapshots"},"_meta":{"x.ai/tool":{"name":"run_terminal_command"}}}}}
+{"timestamp":1700000052,"method":"session/update","params":{"sessionId":"m","update":{"sessionUpdate":"tool_call_update","toolCallId":"call-1","status":"completed","rawOutput":{"stdout":"3 snapshots"}}}}
+{"timestamp":1700000060,"method":"session/update","params":{"sessionId":"m","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"一共三个快照。"}}}}
+{"timestamp":1700000070,"method":"_x.ai/session/update","params":{"sessionId":"m","update":{"sessionUpdate":"turn_completed","stop_reason":"end_turn"}}}
+{"timestamp":1700000080,"method":"session/update","params":{"sessionId":"m","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"还需要别的吗？"}}}}
+{"timestamp":1700000090,"method":"_x.ai/session/update","params":{"sessionId":"m","update":{"sessionUpdate":"turn_completed","stop_reason":"end_turn"}}}
+{"method":"session/update","params":{"sessionId":"m","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"没有了"}}}}
+{"timestamp":1700000110,"method":"session/update","params":{"sessionId":"m","update":{"sessionUpdate":"某个还没见过的类型","content":{"type":"text","text":"不该产块"}}}}
+{"timestamp":1700000120,"method":"_x.ai/session/update","params":{"sessionId":"m","update":{"sessionUpdate":"turn_completed","stop_reason":"end_turn"}}}

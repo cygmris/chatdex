@@ -124,4 +124,35 @@ var repairs = []string{
 	     SELECT COUNT(*) FROM blocks b WHERE b.session_id = sessions.id AND b.seq >= 0)
 	 WHERE msg_count <> (
 	     SELECT COUNT(*) FROM blocks b WHERE b.session_id = sessions.id AND b.seq >= 0)`,
+
+	// Grok 的正文来源从 chat_history.jsonl 换成同目录的 updates.jsonl（R25）。
+	// 前者会被 Grok CLI 原地压缩，索引它等于让内容随压缩静默消失；实测 1279 条
+	// 提问里 chat_history 只剩 15%，另外 82% 只存在于 updates.jsonl。
+	//
+	// file_path 是 UNIQUE 键、水位挂在它上面，所以必须改写身份并把水位归零，
+	// 让下一轮扫描从 updates.jsonl 整个重建。旧摘要是按压缩后那 15% 生成的，
+	// 内容重建后不再成立，一并作废。
+	//
+	// 🔴 **顺序是「先改身份、再清残块」，不能反。** repairs 每条走独立的
+	// db.Exec（见 store.go），**没有事务**。若先删块再改路径，一旦中间崩掉就留下
+	// 「块没了、路径还是旧的」——而下次启动的 LIKE 仍然命中，会把已经空了的会话
+	// 再删一遍，看不出异常，但那个会话此后永远指着一个会被压缩的文件。
+	// 反过来则中间态自己可识别：offset=0 恰好就是「已改身份、块还没清」这个集合，
+	// 下次启动②照样命中，自愈。**幂等性来自结构，不来自事务。**
+	`UPDATE sessions
+	    SET file_path = replace(file_path, '/chat_history.jsonl', '/updates.jsonl'),
+	        size = 0, mtime = 0, "offset" = 0, msg_count = 0,
+	        summary = NULL, summary_at = 0, summary_msg_count = 0
+	  WHERE source = 'grok' AND file_path LIKE '%/chat_history.jsonl'`,
+
+	// ② 清掉水位已归零却还留着块的 Grok 会话。FTS 由 blocks 的触发器同步，
+	// 不必手写 'delete' 指令。正常情况下命中 0 行（新发现还没索引的会话本来就没块）。
+	//
+	// ⚠️ **判据只能是 "offset" = 0，不能再加 msg_count = 0**：上面那条 msg_count
+	// 自愈语句**跑在本条之前**，会把中间态会话的 msg_count 从 0 重算回真实块数。
+	// 于是「offset=0 AND msg_count=0」在崩溃恢复时恰好**不**命中——那正是它本该
+	// 命中的唯一场景，残块从此永远清不掉。（变异扫描抓到：去掉 msg_count 谓词
+	// 没有任何测试变红，查下去才发现是这条谓词本身错了。）
+	`DELETE FROM blocks WHERE session_id IN (
+	     SELECT id FROM sessions WHERE source = 'grok' AND "offset" = 0)`,
 }
