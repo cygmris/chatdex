@@ -70,8 +70,8 @@ Grab the archive for your platform from
 (linux / macOS × amd64 / arm64):
 
 ```bash
-tar -xzf chatdex_0.1.0_linux_amd64.tar.gz
-install -m755 chatdex_0.1.0_linux_amd64/chatdex ~/.local/bin/chatdex
+tar -xzf chatdex_0.2.0_linux_amd64.tar.gz
+install -m755 chatdex_0.2.0_linux_amd64/chatdex ~/.local/bin/chatdex
 
 chatdex index      # first full index — ~13 min for 3 000 sessions
 chatdex serve      # dashboard :5021 / API+MCP :5022

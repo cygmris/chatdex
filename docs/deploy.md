@@ -93,7 +93,7 @@ CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -o chatdex-darwin-arm64 ./cmd/ch
 注入版本（安装脚本会带上）：
 
 ```bash
-go build -ldflags "-X github.com/cygmris/chatdex/internal/version.Version=0.1.0 -X github.com/cygmris/chatdex/internal/version.Commit=$(git rev-parse --short HEAD)" -o ~/.local/bin/chatdex ./cmd/chatdex
+go build -ldflags "-X github.com/cygmris/chatdex/internal/version.Version=0.2.0 -X github.com/cygmris/chatdex/internal/version.Commit=$(git rev-parse --short HEAD)" -o ~/.local/bin/chatdex ./cmd/chatdex
 ```
 
 也可以下 [Releases](https://github.com/cygmris/chatdex/releases/latest) 的预编译包（linux / macOS × amd64 / arm64）。

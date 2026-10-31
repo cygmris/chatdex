@@ -60,8 +60,8 @@
 （linux / macOS × amd64 / arm64）：
 
 ```bash
-tar -xzf chatdex_0.1.0_linux_amd64.tar.gz
-install -m755 chatdex_0.1.0_linux_amd64/chatdex ~/.local/bin/chatdex
+tar -xzf chatdex_0.2.0_linux_amd64.tar.gz
+install -m755 chatdex_0.2.0_linux_amd64/chatdex ~/.local/bin/chatdex
 
 chatdex index      # 首次全量索引，3000 会话约 13 分钟
 chatdex serve      # dashboard :5021 / API+MCP :5022
