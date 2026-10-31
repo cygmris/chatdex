@@ -33,7 +33,8 @@
     {
       "file": "tokprobe.py",
       "bytes": 2578,
-      "sha256": "303cecb494ae0a0a02ca6e8153b3bbbf0336d73aea558a86e9dc7077eaf2da9c"
+      "sha256": "5665614a443355d9bcfc99c1219d84517078ebccf416f0e03634d658f0810e48",
+      "note": "第 3 行的 scratchpad 绝对路径在发布前换成了占位 <scratchpad>，其余字节与原件相同"
     },
     {
       "file": "perf.py",

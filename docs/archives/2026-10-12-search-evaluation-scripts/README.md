@@ -19,6 +19,7 @@
 ## 边界
 
 - 七个 `.py` 是历史原件，保留原注释和路径，不因归档而宣称现在可以直接运行。SHA-256 见 `manifest.json`。
+- 例外：`tokprobe.py` 第 3 行的 scratchpad 绝对路径在发布前换成了占位 `<scratchpad>`（它含本机用户名），其余六个文件与原件逐字节相同；`manifest.json` 里该文件的 SHA-256 是替换后的值并附注。
 - 两个构建语料脚本仍指向旧的 `~/.local/share/chatdex/index.db`；不能将它们当作当前本机数据库配置。
 - `gap_sparse.py` 提到的 `gap_eval.py` 不在本次归档中；其 `--with-summary` 分支读取 `summaries`，而原 `gap_corpus.py` 不负责写这个字段，不能假设七个文件直接串起来就能复现报告全部结果。
 - `gap_embed.py` 和 `gap_dense.py` 的请求指向 `127.0.0.1:11434`；其固定 `Authorization` 值已核对为本地占位值，不是迁入的账号凭据。
