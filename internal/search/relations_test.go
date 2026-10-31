@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/cygmris/chatdex/internal/model"
+	"github.com/cygmris/chatdex/internal/search"
 )
 
 // Children 的总数必须是**总数**，不是返回条数。
@@ -102,7 +103,7 @@ func TestGetSessionCarriesRelations(t *testing.T) {
 		seed{uid: "kid", project: "/p", parent: "main", blocks: []model.Block{{Kind: "assistant", Body: "子"}}},
 	)
 
-	v, err := e.GetSession(ids["main"], 0, 10)
+	v, err := e.GetSession(ids["main"], search.SessionQuery{Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +114,7 @@ func TestGetSessionCarriesRelations(t *testing.T) {
 		t.Errorf("主会话应有 1 个子代理，实际 %d", v.ChildCount)
 	}
 
-	v, err = e.GetSession(ids["kid"], 0, 10)
+	v, err = e.GetSession(ids["kid"], search.SessionQuery{Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}

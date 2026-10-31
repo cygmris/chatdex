@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"path/filepath"
 	"time"
 
 	"github.com/cygmris/chatdex/internal/chat"
@@ -58,6 +59,9 @@ func runServe(args []string) error {
 	defer st.Close()
 
 	engine := search.NewEngine(st.DB())
+	// 近义词表与配置文件同目录；改了下一次检索即生效
+	syn := &search.SynonymSource{Path: filepath.Join(filepath.Dir(*cfgPath), "synonyms.txt")}
+	engine.Syn = syn.Get
 	api := &httpapi.Server{
 		Engine:    engine,
 		Store:     st,
@@ -84,8 +88,15 @@ func runServe(args []string) error {
 		return backup.Config{
 			Repo: c.Repo, PasswordFile: c.PasswordFile,
 			ResticPath: c.ResticPath, Sources: srcs,
+			ExcludeLargerThan: c.ExcludeLargerThan,
+			IndexSnapshot:     c.IndexSnapshot,
+			// 快照目录由 db_path 派生：与库同盘同目录（R26 把它放在 +C 目录下，新文件继承 nodatacow）
+			IndexSnapshotDir: filepath.Join(filepath.Dir(cfg.DBPath), "snapshot"),
 		}
-	}}
+	},
+		// 在线备份 API 页对页复制（为什么不是 VACUUM INTO 见 Store.SnapshotTo）
+		IndexSnapshot: st.SnapshotTo,
+	}
 	api.Backup = bk
 	// 全快照并集索引：覆盖率靠它回答「源没了的会话还救不救得回来」。
 	// 首次要扫全部快照（实测 566 个 × 约 1 秒 ≈ 9.4 分钟），所以后台跑、

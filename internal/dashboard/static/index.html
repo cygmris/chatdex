@@ -54,29 +54,16 @@
     </header>
 
     <div class="filters" id="filters">
-      <select id="source" title="来源">
-        <option value="">全部来源</option>
-        <option value="claude">Claude Code</option>
-        <option value="codex">Codex</option>
-        <option value="grok">Grok CLI</option>
-      </select>
-      <select id="agent" title="主会话 / 子代理">
-        <option value="">主会话与子代理</option>
-        <option value="main">仅主会话</option>
-        <option value="sub">仅子代理</option>
-      </select>
-      <select id="kind" title="内容类型">
-        <option value="">全部内容类型</option>
-        <option value="user">仅我说的</option>
-        <option value="assistant">仅助手回答</option>
-        <option value="tool_use">仅工具调用</option>
-        <option value="tool_result">仅工具结果</option>
-        <option value="reasoning">仅思考</option>
-        <option value="summary">仅会话摘要</option>
-      </select>
-      <input id="tool" type="text" placeholder="工具名，如 Bash">
-      <input id="from" type="date" title="起始日期">
-      <input id="to" type="date" title="结束日期">
+      <div class="combo" id="project"></div>
+      <div class="combo" id="source"></div>
+      <div class="combo" id="agent"></div>
+      <div class="combo" id="kind"></div>
+      <div class="combo" id="tool"></div>
+      <div class="range" id="range">
+        <button id="range-btn" class="range-btn" type="button" aria-haspopup="dialog" aria-expanded="false"
+          title="按消息时间筛：只看这段日子里写的消息">消息时间：全部</button>
+        <div id="range-pop" class="range-pop" role="dialog" aria-label="消息时间范围" hidden></div>
+      </div>
       <button id="filters-clear" class="ghost sm" type="button">清空</button>
     </div>
 
@@ -88,6 +75,8 @@
 <script src="/vendor/marked.min.js"></script>
 <script src="/vendor/purify.min.js"></script>
 <script src="/boot.js"></script>
+<script src="/range-picker.js"></script>
+<script src="/combo.js"></script>
 <script src="/views/reader.js"></script>
 <script src="/views/search.js"></script>
 <script src="/views/timeline.js"></script>

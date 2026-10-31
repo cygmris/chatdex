@@ -135,3 +135,22 @@ func TestRetryPutsFailedBack(t *testing.T) {
 		t.Errorf("不存在的会话不该报错也不该成功：ok=%v err=%v", ok, err)
 	}
 }
+
+// 源文件消失的会话照样要入队：摘要读的是 blocks（经 GetSession），与文件无关。
+// R11 时这里按 alive 过滤，于是消失的会话既搜不到、也永远没有那层转述（R26）。
+func TestEnqueueMissingIncludesDead(t *testing.T) {
+	st := openTemp(t)
+	id := seedForSummary(t, st, "gone", 3)
+	if err := st.MarkDead("/sessions/gone.jsonl"); err != nil {
+		t.Fatal(err)
+	}
+	n, err := st.EnqueueMissing()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var queued int
+	st.DB().QueryRow(`SELECT COUNT(*) FROM summary_queue WHERE session_id = ? AND state = 'pending'`, id).Scan(&queued)
+	if n != 1 || queued != 1 {
+		t.Errorf("已消失的会话应入队：n=%d queued=%d", n, queued)
+	}
+}

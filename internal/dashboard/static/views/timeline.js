@@ -87,6 +87,7 @@
           <button class="tl" type="button" data-id="${s.id}" data-seq="${s.target_seq || 0}">
             <span class="badge">${CD.sourceLabel(s.source)}</span>
             ${s.is_sub ? '<span class="badge sub">子代理</span>' : ''}
+            ${s.alive === false ? '<span class="badge gone" title="源文件已被清理，内容来自索引">源已消失</span>' : ''}
             <span class="tl-time mono">${CD.fmtRange(s.started_at, s.ended_at)}</span>
             <span class="tl-n mono">${s.msg_count} 条</span>
             <span class="tl-label${s.title ? ' named' : s.has_summary ? ' from-summary' : ''}">${CD.esc(s.label || '（无内容）')}</span>

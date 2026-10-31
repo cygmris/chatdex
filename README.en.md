@@ -27,7 +27,7 @@
 
 ## Why
 
-`~/.claude/projects/`, `~/.codex/sessions/`, and `~/.grok/sessions/` hold your entire working history. `grep` doesn't cut it:
+`~/.claude/projects/`, `~/.codex/sessions/`, `~/.grok/sessions/`, and `~/.cursor/projects/` hold your entire working history. `grep` doesn't cut it:
 
 - **CJK doesn't match.** SQLite FTS5's `unicode61` treats a whole Chinese sentence as one token, so
   searching 「限流」 never finds 「请求限流」.
@@ -46,7 +46,7 @@ chatdex has a specific answer to each, with measured numbers behind it — see
 
 | | |
 |---|---|
-| 🔍 **Mixed CJK/ASCII full-text search** | Per-character CJK splitting over FTS5. Median **97 ms** on a real corpus of 4 662 sessions / 1.58 M blocks |
+| 🔍 **Mixed CJK/ASCII full-text search** | Per-character CJK splitting over FTS5. Median **97 ms** on a real corpus of 4 662 sessions / 1.58 M blocks; the date filter is a custom "message time" range picker (presets / calendar / typed input — it filters by when the message was written) |
 | 🧠 **Summaries are indexed too** | A local LLM writes one line per session, **rephrasing in conceptual terms** — which is what closes the vocabulary gap above |
 | 💬 **Ask** | Ask in plain language; the LLM rewrites its query and retries across rounds, and **shows you every query it tried**; scope it to a single project or ask across everything |
 | 🏷 **Session names** | A name you set with `/rename` takes precedence over the LLM summary — what you called it beats what a model guessed |
@@ -58,7 +58,7 @@ chatdex has a specific answer to each, with measured numbers behind it — see
 | 🎨 **Four themes** | Light/dark/follow-system, all contrast ratios verified against WCAG AA by script |
 | ⚙️ **Settings UI** | Change config in the browser; most options take effect immediately |
 | 📈 **Generation progress** | Where summarising is up to, how long is left, which sessions failed and why, one-click retry; and a **time window** so it only runs when you want (e.g. `02:00-08:00` overnight, wrapping past midnight is fine) |
-| 🗄 **Backups (via restic)** | restic keeps it safe; chatdex answers what restic cannot — **are the sessions you indexed actually in the backup?** — and reads an original back once its source file is gone; the repo can also be mirrored to S3 / R2, reporting how many snapshots behind that copy is. restic is optional |
+| 🗄 **Backups (via restic)** | restic keeps it safe; chatdex answers what restic cannot — **are the sessions you indexed actually in the backup?** — and reads an original back once its source file is gone; the repo can also be mirrored to S3 / R2, reporting how many snapshots behind that copy is. **The index database itself goes into the repo once a day** (the text of sessions whose source file is gone, and every summary, exist nowhere else). restic is optional |
 | 🔒 **Read-only, localhost-only** | See [Security boundaries](#security-boundaries) |
 
 ## Quick start
@@ -321,23 +321,25 @@ Measured 2026-09-09 on the author's machine (historical comparison in [architect
 
 | | |
 |---|---|
-| Sessions / blocks | 4 662 (2 419 alive, 2 243 whose source file is gone) / 1 582 316 |
+| Sessions / blocks | 4 711 (2 015 with the source file still on disk, **2 696 whose source is gone — still searchable**) / 1 689 252 |
 | Per source | Claude Code 3 941 · Codex 469 · Grok CLI 252 |
 | Indexed text / index size | 1.49 GB / 4.59 GB |
 | Search latency | median **97 ms**, p95 294 ms (30 queries × 3 runs, 90 samples) |
 | Slowest query | 1 478 ms — the single CJK character 的, matching hundreds of thousands of blocks |
 | Summary throughput | median 0.8 s/session; full run took **2 h 13 min** (measured 2026-07-29, not re-run) |
 
-## The three JSONL formats all differ (read before writing a parser)
+## The four JSONL formats all differ (read before writing a parser)
 
-| | Claude Code | Codex | Grok CLI |
-|---|---|---|---|
-| Path | `~/.claude/projects/<slug>/<uuid>.jsonl` | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` | `~/.grok/sessions/<percent-encoded cwd>/<uuid>/updates.jsonl` |
-| Role lives at | `message.role` | `payload.role` (outer `type: response_item`) | `params.update.sessionUpdate` |
-| Text field | `content` as string, or list items with `type=="text"` | list items with `type=="input_text"` | `content.text`, **one message split across consecutive lines** |
-| Timestamps | on every record | on every record | on every record (one `timestamp` per line) |
-| Metadata | scattered through the transcript | first line, `session_meta` | `summary.json` next to it |
-| Subagents | separate `<uuid>/subagents/agent-*.jsonl` | same file | the structural test reads the parent's `subagents/<uuid>/`, but **the transcript is recorded in the parent's stream** |
+| | Claude Code | Codex | Grok CLI | Cursor CLI |
+|---|---|---|---|---|
+| Path | `~/.claude/projects/<slug>/<uuid>.jsonl` | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` | `~/.grok/sessions/<percent-encoded cwd>/<uuid>/updates.jsonl` | `~/.cursor/projects/<slug>/agent-transcripts/<uuid>/<uuid>.jsonl` |
+| Role lives at | `message.role` | `payload.role` (outer `type: response_item`) | `params.update.sessionUpdate` | `role` (`user` / `assistant`). `type: turn_ended` is not a message |
+| Text field | `content` as string, or list items with `type=="text"` | list items with `type=="input_text"` | `content.text`, **one message split across consecutive lines** | `message.content[]` items with `type=="text"`. The user prompt is inside `<user_query>` |
+| Timestamps | on every record | on every record | on every record (one `timestamp` per line) | not a JSON field. A `<timestamp>` in the user text carries an offset; later blocks reuse it |
+| Metadata | scattered through the transcript | first line, `session_meta` | `summary.json` next to it | `~/.cursor/chats/<md5(cwd)>/<uuid>/meta.json` (`cwd`, `title`, `createdAtMs`) |
+| Subagents | separate `<uuid>/subagents/agent-*.jsonl` | same file | the structural test reads the parent's `subagents/<uuid>/`, but **the transcript is recorded in the parent's stream** | separate `<uuid>/subagents/<uuid>.jsonl`. The parent uid is the directory above `subagents` |
+
+Cursor CLI search reads that jsonl only. Blobs in `~/.cursor/chats/.../store.db` are largely encrypted and are not indexed. The jsonl has no `tool_result`; a tool call is indexed as `tool_use` with `name` and `input`. User text without `<user_query>` is an injected catalog and is not indexed. The project path prefers `cwd` from `meta.json`. The slug folds both `/` and `.` into `-`, and the reverse is used only when exactly one directory matches. Otherwise the project path stays empty.
 
 > [!IMPORTANT]
 > **For Grok the transcript is `updates.jsonl`, never the more transcript-looking

@@ -53,7 +53,7 @@ func (a *Agent) systemPrompt(scope Scope) string {
 const basePrompt = `你是 chatdex 的检索助手，帮用户在他自己的历史会话（Claude Code 与 Codex）里找东西。
 
 工作方式：
-- 先用 search_sessions 检索。关键词是**字面匹配**，命中为 0 时**必须换个说法再搜**：
+- 先用 search_sessions 检索。关键词是**字面匹配**（会按近义词表扩展，via_synonym=true 的条目是靠近义词命中的），命中为 0 时**必须换个说法再搜**：
   换同义词、换更短的词、去掉限定条件、或改用工具名/项目路径过滤。不要直接回答「没找到」。
 - 拿不准某条是不是用户要找的，就用 get_session 读几条确认。
 - 回答时必须列出具体的会话：会话 id、项目路径、原始文件绝对路径。

@@ -13,7 +13,7 @@ package index
 const schemaSQL = `
 CREATE TABLE IF NOT EXISTS sessions (
     id                INTEGER PRIMARY KEY,
-    source            TEXT    NOT NULL,          -- claude | codex | grok
+    source            TEXT    NOT NULL,          -- claude | codex | grok | cursor
     session_uid       TEXT    NOT NULL,
     parent_uid        TEXT    NOT NULL DEFAULT '',
     agent_label       TEXT    NOT NULL DEFAULT '',

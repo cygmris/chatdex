@@ -19,6 +19,8 @@ func TestStaticAssetsAreEmbedded(t *testing.T) {
 	for _, c := range []struct{ path, want string }{
 		{"/", "chatdex"},
 		{"/boot.js", "escHit"},
+		{"/range-picker.js", "rangeMath"},
+		{"/combo.js", "comboMath"},
 		{"/theme.css", "--accent"},
 		{"/layout.css", "var(--bg)"},
 		{"/views/search.js", "register"},

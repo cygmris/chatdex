@@ -2,6 +2,7 @@
 package search_test
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -215,20 +216,100 @@ func TestProjectFilterMatchesSubdirectories(t *testing.T) {
 }
 
 // 失效会话（原始文件已删）不得出现在检索结果里（需求 5.4）。
-func TestDeadSessionsExcluded(t *testing.T) {
+// 源文件消失的会话必须照样搜得到，并且标出 Alive=false。
+//
+// R1 时这里断言的是相反的行为（「失效会话不再出现」）。那条断言把 alive 读成了
+// 「内容还算不算数」——而它只描述文件在不在磁盘上，内容一直都在 blocks 里。
+// 3.9% 时看不出差别，57% 时就是半个索引（R26）。
+func TestDeadSessionsSearchableAndMarked(t *testing.T) {
 	st, e := newEngine(t)
-	seedSessions(t, st, seed{uid: "gone", project: "/p", blocks: []model.Block{
-		{Kind: model.KindUser, Body: "这个会话的文件后来被删了 rsync"},
-	}})
+	ids := seedSessions(t, st,
+		seed{uid: "gone", project: "/p", blocks: []model.Block{
+			{Kind: model.KindUser, Body: "这个会话的文件后来被删了 rsync"},
+		}},
+		seed{uid: "here", project: "/p", blocks: []model.Block{
+			{Kind: model.KindUser, Body: "这个会话的文件还在 rsync"},
+		}},
+	)
 	if err := st.MarkDead("/sessions/gone.jsonl"); err != nil {
 		t.Fatal(err)
 	}
+
+	alive := func(hits []search.SessionHit) map[int64]bool {
+		m := map[int64]bool{}
+		for _, h := range hits {
+			m[h.ID] = h.Alive
+		}
+		return m
+	}
+	check := func(name string, got map[int64]bool) {
+		t.Helper()
+		if v, ok := got[ids["gone"]]; !ok {
+			t.Errorf("%s：源文件已消失的会话不在结果里", name)
+		} else if v {
+			t.Errorf("%s：已消失的会话 Alive 应为 false", name)
+		}
+		if v, ok := got[ids["here"]]; !ok || !v {
+			t.Errorf("%s：仍存在的会话应出现且 Alive=true，实际 ok=%v v=%v", name, ok, v)
+		}
+	}
+
 	res, err := e.SearchSessions(search.Query{Text: "rsync"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res.Sessions) != 0 {
-		t.Errorf("失效会话仍出现在结果里: %+v", res.Sessions)
+	check("关键词检索", alive(res.Sessions))
+
+	res, err = e.SearchSessions(search.Query{Project: "/p"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	check("无关键词列表", alive(res.Sessions))
+
+	blocks, err := e.SearchBlocks(search.Query{Text: "rsync"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[int64]bool{}
+	for _, b := range blocks {
+		seen[b.SessionID] = true
+	}
+	if !seen[ids["gone"]] {
+		t.Errorf("块检索：已消失会话的块不在结果里")
+	}
+
+	ps, err := e.Projects()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ps) != 1 || ps[0].Sessions != 2 {
+		t.Errorf("项目列表应把已消失的会话计入，实际 %+v", ps)
+	}
+}
+
+// 父子关系不看 alive：父会话源文件没了，子代理照样能找到它；反之亦然。
+func TestRelationsIgnoreAlive(t *testing.T) {
+	st, e := newEngine(t)
+	ids := seedSessions(t, st,
+		seed{uid: "main", project: "/p", blocks: repeatBlocks("assistant", "父", 1)},
+		seed{uid: "kid", project: "/p", parent: "main", blocks: repeatBlocks("assistant", "子", 1)},
+	)
+	for _, f := range []string{"/sessions/main.jsonl", "/sessions/kid.jsonl"} {
+		if err := st.MarkDead(f); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p, err := e.Parent(ids["kid"])
+	if err != nil || p == nil || p.ID != ids["main"] || p.Alive {
+		t.Errorf("父会话源文件消失后仍应返回且 Alive=false，实际 p=%+v err=%v", p, err)
+	}
+	kids, total, err := e.Children(ids["main"], 0)
+	if err != nil || total != 1 || len(kids) != 1 || kids[0].Alive {
+		t.Errorf("子代理源文件消失后仍应列出且 Alive=false，实际 total=%d kids=%+v err=%v", total, kids, err)
+	}
+	v, err := e.GetSession(ids["main"], search.SessionQuery{Limit: 10})
+	if err != nil || v.ChildCount != 1 {
+		t.Errorf("ChildCount 应计入已消失的子代理，实际 %d err=%v", v.ChildCount, err)
 	}
 }
 
@@ -240,7 +321,7 @@ func TestGetSessionPaginatesInOrder(t *testing.T) {
 	}
 	ids := seedSessions(t, st, seed{uid: "long", project: "/p", blocks: blocks})
 
-	v, err := e.GetSession(ids["long"], 0, 10)
+	v, err := e.GetSession(ids["long"], search.SessionQuery{Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -257,7 +338,7 @@ func TestGetSessionPaginatesInOrder(t *testing.T) {
 		t.Error("未给出原始文件绝对路径（需求 3.4）")
 	}
 
-	page2, err := e.GetSession(ids["long"], 10, 10)
+	page2, err := e.GetSession(ids["long"], search.SessionQuery{Offset: 10, Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -523,5 +604,137 @@ func TestLastSeqIsTheLastMatchingBlock(t *testing.T) {
 	only := byUID["once"]
 	if only.LastSeq != only.BestSeq {
 		t.Fatalf("只提一次时 LastSeq 应等于 BestSeq，实得 last=%d best=%d", only.LastSeq, only.BestSeq)
+	}
+}
+
+// 命中在块末尾时，片段里的高亮必须出现在前 3 行里——结果卡片只露 3 行（R29，实测 5150/5485）。
+// 两条路径都断言：SearchSessions 与 SearchBlocks 各自取片段，少守一条就漏一条。
+func TestSnippetHitIsVisibleInFirstLines(t *testing.T) {
+	st, e := newEngine(t)
+	body := strings.Repeat("前面的铺垫文字", 40) + "\n一行\n两行\n三行\n最后才说到事故这个词"
+	seedSessions(t, st, seed{uid: "late", project: "/p", blocks: []model.Block{{Kind: model.KindUser, Body: body}}})
+	check := func(name, snip string) {
+		t.Helper()
+		i := strings.Index(snip, search.HitOpen)
+		if i < 0 {
+			t.Fatalf("%s：片段里没有高亮：%q", name, snip)
+		}
+		if lines := strings.Count(snip[:i], "\n") + 1; lines > 3 {
+			t.Errorf("%s：高亮在第 %d 行，卡片只露 3 行：%q", name, lines, snip)
+		}
+	}
+	res, err := e.SearchSessions(search.Query{Text: "事故"})
+	if err != nil || len(res.Sessions) != 1 {
+		t.Fatalf("res=%+v err=%v", res, err)
+	}
+	check("SearchSessions", res.Sessions[0].Snippet)
+	hits, err := e.SearchBlocks(search.Query{Text: "事故"})
+	if err != nil || len(hits) != 1 {
+		t.Fatalf("hits=%+v err=%v", hits, err)
+	}
+	check("SearchBlocks", hits[0].Snippet)
+}
+
+// 回读按类型过滤：分页、总数、定位全部按**可见集**算。
+//
+// 固定语料 8 条：seq 0 user / 1 tool_use / 2 tool_result / 3 assistant / 4 user / 5 tool_use / 6 tool_result / 7 assistant。
+// 只看 user+assistant 时可见集是 seq 0,3,4,7。
+func seedMixedKinds(t *testing.T, st *index.Store) int64 {
+	t.Helper()
+	var blocks []model.Block
+	for i := 0; i < 2; i++ {
+		blocks = append(blocks,
+			model.Block{Kind: model.KindUser, Body: "问"},
+			model.Block{Kind: model.KindToolUse, ToolName: "Bash", Body: "{}"},
+			model.Block{Kind: model.KindToolResult, Body: "结果"},
+			model.Block{Kind: model.KindAssistant, Body: "答"},
+		)
+	}
+	return seedSessions(t, st, seed{uid: "mixed", project: "/p", blocks: blocks})["mixed"]
+}
+
+func seqs(ms []search.Message) []int {
+	out := make([]int, len(ms))
+	for i, m := range ms {
+		out[i] = m.Seq
+	}
+	return out
+}
+
+func TestGetSessionFiltersByKindAndPagesTheVisibleSet(t *testing.T) {
+	st, e := newEngine(t)
+	id := seedMixedKinds(t, st)
+	conv := []string{"user", "assistant"}
+
+	// 第二页（每页 2 条）= 可见集第 3、4 条 = seq 4、7；不是 seq>=2 那两条
+	v, err := e.GetSession(id, search.SessionQuery{Offset: 2, Limit: 2, Kinds: conv})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := seqs(v.Messages); fmt.Sprint(got) != "[4 7]" {
+		t.Errorf("过滤后第二页 seq = %v, want [4 7]", got)
+	}
+	if v.Total != 4 || v.TotalAll != 8 {
+		t.Errorf("Total=%d TotalAll=%d, want 4 / 8（Total 是可见集，不是全部）", v.Total, v.TotalAll)
+	}
+	if v.FromSeq != 2 {
+		t.Errorf("FromSeq = %d, want 2（可见集偏移）", v.FromSeq)
+	}
+	want := map[string]int{"user": 2, "assistant": 2, "tool_use": 2, "tool_result": 2}
+	if fmt.Sprint(v.KindCounts) != fmt.Sprint(want) {
+		t.Errorf("KindCounts = %v, want %v", v.KindCounts, want)
+	}
+
+	// 不认识的类型名不算过滤条件；全不合法 = 全部
+	if got := search.ParseKinds(" user,bogus,,assistant,user "); fmt.Sprint(got) != "[user assistant]" {
+		t.Errorf("ParseKinds = %v", got)
+	}
+	if got := search.ParseKinds("bogus"); got != nil {
+		t.Errorf("全不合法应得 nil，实际 %v", got)
+	}
+}
+
+func TestGetSessionAtSeqLandsOnItsVisiblePage(t *testing.T) {
+	st, e := newEngine(t)
+	id := seedMixedKinds(t, st)
+	conv := []string{"user", "assistant"}
+	at := func(n int) *int { return &n }
+
+	// seq 7 在可见集里排第 4（下标 3），每页 2 条 → 第二页，页首偏移 2
+	v, err := e.GetSession(id, search.SessionQuery{Limit: 2, Kinds: conv, AtSeq: at(7), Align: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := seqs(v.Messages); fmt.Sprint(got) != "[4 7]" || v.FromSeq != 2 {
+		t.Errorf("定位 seq 7：页 = %v from=%d, want [4 7] / 2", got, v.FromSeq)
+	}
+	if v.TargetKind != "assistant" {
+		t.Errorf("TargetKind = %q, want assistant", v.TargetKind)
+	}
+
+	// 命中的那条是被隐藏的类型（seq 5 tool_use）：仍落到它前后可见消息所在的页，并报出它的类型
+	v, err = e.GetSession(id, search.SessionQuery{Limit: 2, Kinds: conv, AtSeq: at(5), Align: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := seqs(v.Messages); fmt.Sprint(got) != "[4 7]" || v.TargetKind != "tool_use" {
+		t.Errorf("定位被隐藏的 seq 5：页 = %v kind=%q, want [4 7] / tool_use", got, v.TargetKind)
+	}
+
+	// 不对齐 = 从那条起读（MCP 的 from_seq 语义）；不带 Kinds 时偏移就是 seq
+	v, err = e.GetSession(id, search.SessionQuery{Limit: 3, AtSeq: at(3)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := seqs(v.Messages); fmt.Sprint(got) != "[3 4 5]" || v.FromSeq != 3 {
+		t.Errorf("from_seq=3 不带过滤：%v from=%d, want [3 4 5] / 3", got, v.FromSeq)
+	}
+	// 带 Kinds 的 from_seq：从 seq 4 起的可见消息 = 4, 7
+	v, err = e.GetSession(id, search.SessionQuery{Limit: 10, Kinds: conv, AtSeq: at(4)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := seqs(v.Messages); fmt.Sprint(got) != "[4 7]" {
+		t.Errorf("from_seq=4 带过滤：%v, want [4 7]", got)
 	}
 }

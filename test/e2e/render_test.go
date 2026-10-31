@@ -134,7 +134,7 @@ var fetchLikeRe = regexp.MustCompile(`(?:src|href)\s*=\s*["']https?://|fetch\(\s
 
 func TestNoRuntimeExternalRequests(t *testing.T) {
 	e := start(t)
-	for _, p := range []string{"/", "/boot.js", "/theme.css", "/layout.css",
+	for _, p := range []string{"/", "/boot.js", "/theme.css", "/layout.css", "/combo.js",
 		"/views/search.js", "/views/reader.js", "/views/chat.js",
 		"/vendor/marked.min.js", "/vendor/purify.min.js"} {
 		if m := fetchLikeRe.FindString(fetchText(t, e.uiPort, p)); m != "" {
@@ -377,7 +377,9 @@ func TestReaderRelationsAreLazyAndLabelFree(t *testing.T) {
 	// 第一版就是那么写的，锚点用了 "\n  function "，而 load 的声明是
 	// "\n  async function load()" —— 匹配不上，于是把调用挪进 load 的变异**没被咬**。
 	// 取样得对准命题本身：命题是「/children 不在 load 体内」，那就去看 load 体内。
-	ls := strings.Index(src, "async function load()")
+	// 锚到 "load(" 而不是 "load()"：R31 起 load 带 locate 参数，锚死括号会在签名一变时整条测试
+	// 失效——而那正是「取样锚点匹配不上 ⇒ 变异不被咬」的同一种病。
+	ls := strings.Index(src, "async function load(")
 	if ls < 0 {
 		t.Fatal("找不到 load()")
 	}
@@ -424,9 +426,25 @@ func TestReaderPagerKeepsDateTargetAndDeepLink(t *testing.T) {
 	if end := strings.Index(body, "\n  /* ----------------"); end > 0 {
 		body = body[:end]
 	}
-	for _, want := range []string{"Math.max(1", "Math.min(pageCount", "replace: true", "id: cur.id", "seq: cur.target"} {
+	// clamp 仍在 goPage；翻页结果交给 load(false)
+	for _, want := range []string{"Math.max(1", "Math.min(pageCount", "load(false)"} {
 		if !strings.Contains(body, want) {
-			t.Errorf("goPage 缺少 clamp 或 seq URL 同步：%q", want)
+			t.Errorf("goPage 缺少 clamp 或没把翻页交给 load(false)：%q", want)
+		}
+	}
+	// seq 的 URL 同步在 load 里：R31 起 from 是可见集偏移而不是 seq，页首 seq 要等响应回来才知道，
+	// 所以写 URL 的位置从 goPage 挪到了 load 的翻页分支。守的命题不变——翻页必须 replace 写回 seq。
+	ls := strings.Index(reader, "async function load(")
+	if ls < 0 {
+		t.Fatal("找不到 load()")
+	}
+	loadBody := reader[ls:]
+	if end := strings.Index(loadBody[1:], "\n  function "); end > 0 {
+		loadBody = loadBody[:end]
+	}
+	for _, want := range []string{"replace: true", "id: cur.id", "seq: cur.target"} {
+		if !strings.Contains(loadBody, want) {
+			t.Errorf("load 的翻页分支缺少 seq URL 同步：%q", want)
 		}
 	}
 	for _, old := range []string{"cur.from -= PAGE", "cur.from += PAGE"} {
@@ -1149,7 +1167,7 @@ func TestTimelineUsesEveryParsedQueryField(t *testing.T) {
 	}
 
 	tl := readRepoFile(t, "internal/search/timeline.go")
-	used := stripGoLineComments(between(t, tl, "func (q Query) sessionFilters()", "\n}\n")) +
+	used := stripGoLineComments(between(t, tl, "func (q Query) sessionFilters(", "\n}\n")) +
 		stripGoLineComments(between(t, decl, "func (q Query) sessionScopeFilters()", "\n}\n"))
 
 	// 过滤链把一部分条件**委托**给了辅助函数，字段名只出现在那些函数体里
@@ -1254,5 +1272,88 @@ func TestSummaryLengthRequirementIsConsistent(t *testing.T) {
 			t.Errorf("两处提示词的字数要求不一致：%s 与 %s —— 同一条规则只能有一个数",
 				first, hit[1])
 		}
+	}
+}
+
+// 回读页的控件要跟着视口走：返回 / 原文 / 类型开关 / 紧凑分页都在吸顶的 .reader-bar 里，
+// 元信息块里不再有开关（R31 放在那儿，一页 100 条读到中间要滚回顶部才点得到）。
+// 结构守卫：bar 里有什么、meta 里没什么、CSS 规则块里有 sticky 与 token 背景；
+// 真的贴不贴顶、正文透不透由浏览器验收，本测试不冒充。
+func TestReaderToolbarIsStickyAndHoldsControls(t *testing.T) {
+	e := start(t)
+	reader := fetchText(t, e.uiPort, "/views/reader.js")
+	head := strings.Index(reader, `<div class="reader-head">`)
+	if head < 0 {
+		t.Fatal("找不到 .reader-head 模板")
+	}
+	// 主模板里 bar 紧挨在 head 前面；全隐藏分支也有一个 bar，所以从 head 往回找最近的那个
+	barStart := strings.LastIndex(reader[:head], `<div class="reader-bar">`)
+	if barStart < 0 {
+		t.Fatal("主模板的 .reader-head 之前没有 .reader-bar")
+	}
+	bar := reader[barStart:head]
+	for _, want := range []string{`id="rd-back"`, `id="rd-raw"`, "${chips(", `id="rd-bar-prev"`, `id="rd-bar-next"`} {
+		if !strings.Contains(bar, want) {
+			t.Errorf("吸顶工具栏缺 %q", want)
+		}
+	}
+	meta := reader[head:]
+	if end := strings.Index(meta, `<div class="msgs">`); end > 0 {
+		meta = meta[:end]
+	}
+	if strings.Contains(meta, "${chips(") {
+		t.Error("类型开关还留在元信息块里 —— 滚下去就点不到")
+	}
+
+	css := fetchText(t, e.uiPort, "/layout.css")
+	i := strings.Index(css, ".reader-bar {")
+	if i < 0 {
+		t.Fatal("layout.css 没有 .reader-bar 规则")
+	}
+	rule := css[i:]
+	if end := strings.Index(rule, "}"); end > 0 {
+		rule = rule[:end]
+	}
+	for _, want := range []string{"position: sticky", "background: var("} {
+		if !strings.Contains(rule, want) {
+			t.Errorf(".reader-bar 规则缺 %q —— 不吸顶 / 正文会从底下透出来", want)
+		}
+	}
+}
+
+// 界面里不再有原生 <select>：全部走自研 combo（combo.js）。原生下拉不能输入即搜，
+// 项目实测 300 个、工具名 477 个，列全了翻不动、列前 N 个又选不到（R33）。
+// 结构守卫：三处模板里没有 <select 标签；index.html 引入 combo.js；combo 的选项文案经 CD.esc、
+// 开合用 hidden 属性（靠 [hidden] 的 !important 守着）；syncFilterInputs 会回填 combo。
+// 打字过滤 / 键盘 / 右缘翻转由浏览器验收，本测试不冒充。
+var selectTagRe = regexp.MustCompile(`<select[\s>]`)
+
+func TestDropdownsAreCustomCombos(t *testing.T) {
+	e := start(t)
+	for _, p := range []string{"/", "/views/settings.js", "/views/chat.js"} {
+		if m := selectTagRe.FindString(fetchText(t, e.uiPort, p)); m != "" {
+			t.Errorf("%s 里还有原生下拉 %q —— 该换成 combo", p, m)
+		}
+	}
+	if !strings.Contains(fetchText(t, e.uiPort, "/"), `<script src="/combo.js">`) {
+		t.Error("index.html 没有引入 combo.js")
+	}
+	combo := fetchText(t, e.uiPort, "/combo.js")
+	for _, want := range []string{"${CD.esc(o.label)}", "c.pop.hidden = false", "c.pop.hidden = true", `role="listbox"`, `role="option"`} {
+		if !strings.Contains(combo, want) {
+			t.Errorf("combo.js 缺 %q", want)
+		}
+	}
+	boot := fetchText(t, e.uiPort, "/boot.js")
+	i := strings.Index(boot, "CD.syncFilterInputs = () => {")
+	if i < 0 {
+		t.Fatal("找不到 syncFilterInputs")
+	}
+	body := boot[i:]
+	if end := strings.Index(body, "\n};"); end > 0 {
+		body = body[:end]
+	}
+	if !strings.Contains(body, "CD.combos") {
+		t.Error("syncFilterInputs 不回填 combo —— 清空 / 左栏点项目 / URL 还原后下拉显示会是旧值")
 	}
 }

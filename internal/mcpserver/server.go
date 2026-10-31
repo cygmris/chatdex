@@ -20,9 +20,11 @@ func New(engine *search.Engine) *mcp.Server {
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "search_sessions",
-		Description: "检索 Claude Code、Codex 与 Grok CLI 的历史会话。按相关度返回会话列表，" +
+		Description: "检索 Claude Code、Codex、Grok CLI 与 Cursor CLI 的历史会话。按相关度返回会话列表，" +
 			"每条含会话 id、项目路径、原始文件绝对路径、命中片段与最佳命中位置（best_seq）。" +
-			"无命中时明确返回 no_match，不会给近似结果。\n" +
+			"查询词会按近义词表扩展（如 hash 也匹配 提交号/SHA），expanded 列出扩展了什么；" +
+			"via_synonym=true 表示该会话的最佳命中块只用原词匹配不上，至少有一个词是靠近义词补上的。" +
+			"原词与近义词都没命中时明确返回 no_match。\n" +
 			"读结果时注意两个字段的分工：summary 是这个会话的结论，snippet 只是**它为什么匹配**" +
 			"的证据，实测七成以上落在 tool_result / tool_use 上——那是工具输出或调用参数，" +
 			"不是任何人的结论。要确认结论请用 get_session 从 best_seq 读上下文，别把 snippet 当答案。\n" +
@@ -33,7 +35,9 @@ func New(engine *search.Engine) *mcp.Server {
 			"（实测约四成的命中会这样）。它的含义仅此而已：后面还有内容，值得用 get_session " +
 			"从 last_seq 再读一段，别只凭 best_seq 那一处就下结论。\n" +
 			"⚠️ 它**不表示**前面那处是错的——实测最佳块在会话中的位置中位 56%、前后均匀分布，" +
-			"「相关度偏向早期的错误版本」并不成立。没有这个字段则表示 best_seq 已是最后一处命中。",
+			"「相关度偏向早期的错误版本」并不成立。没有这个字段则表示 best_seq 已是最后一处命中。\n" +
+			"alive=false 表示 file_path 已不存在（源文件被 CLI 按保留期清理，实测占索引一半以上）。" +
+			"正文仍在索引里，用 get_session 读即可；别拿这个路径去别的工具里打开。",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, a SearchArgs) (*mcp.CallToolResult, SearchOutput, error) {
 		out, err := t.SearchSessions(a)
 		return nil, out, err
@@ -42,7 +46,9 @@ func New(engine *search.Engine) *mcp.Server {
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "get_session",
 		Description: "读取某个会话的消息序列。可用 from_seq 从命中位置开始读、用 limit 控制条数；" +
-			"超出单次返回预算时会截断并在 note 里说明，可继续用 from_seq 往后读。",
+			"超出单次返回预算时会截断并在 note 里说明，可继续用 from_seq 往后读。\n" +
+			"加 kinds=user,assistant 只读对话、跳过工具调用与结果——长会话里工具块占八成，" +
+			"读结论不必付那份 token；total 随之变成过滤后的条数。",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, a GetSessionArgs) (*mcp.CallToolResult, SessionOutput, error) {
 		out, err := t.GetSession(a)
 		return nil, out, err

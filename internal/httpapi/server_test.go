@@ -2,10 +2,12 @@ package httpapi_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/cygmris/chatdex/internal/httpapi"
 	"github.com/cygmris/chatdex/internal/index"
@@ -196,5 +198,88 @@ func TestStatsSummaryIsNullable(t *testing.T) {
 	}
 	if _, isObj := v.(map[string]any); !isObj {
 		t.Errorf("summary 应当是对象，实际 %T", v)
+	}
+}
+
+// 回读页按类型过滤 + 用 seq 定位：fixture 是 seq0 user、seq1 tool_use。
+func TestSessionEndpointFiltersKindsAndLocatesSeq(t *testing.T) {
+	srv, _ := newServer(t)
+
+	var view search.SessionView
+	if code := getJSON(t, srv.URL+"/api/session/1?kinds=user&seq=1", &view); code != 200 {
+		t.Fatalf("状态码 = %d", code)
+	}
+	if len(view.Messages) != 1 || view.Messages[0].Kind != "user" {
+		t.Errorf("kinds=user 应只剩那条 user，实际 %+v", view.Messages)
+	}
+	if view.Total != 1 || view.TotalAll != 2 {
+		t.Errorf("Total=%d TotalAll=%d, want 1 / 2", view.Total, view.TotalAll)
+	}
+	// seq=1 那条是 tool_use，被隐藏了：页面要据此提示「命中的那条被隐藏」
+	if view.TargetKind != "tool_use" {
+		t.Errorf("TargetKind = %q, want tool_use", view.TargetKind)
+	}
+	if view.KindCounts["tool_use"] != 1 || view.KindCounts["user"] != 1 {
+		t.Errorf("KindCounts = %v", view.KindCounts)
+	}
+}
+
+// /api/tools 给过滤栏的工具下拉当选项：按块数降序、同数按名，并缓存 10 分钟——
+// 全库聚合实测 0.68 s（2.36M 块，blocks 没有 tool_name 索引），每次打开下拉都算一次不可接受。
+func TestToolsEndpointSortsAndCaches(t *testing.T) {
+	st, err := index.Open(filepath.Join(t.TempDir(), "index.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	seed := func(uid string, blocks []model.Block) {
+		t.Helper()
+		id, err := st.UpsertSession(model.SessionMeta{
+			Source: model.SourceClaude, SessionUID: uid, FilePath: "/sessions/" + uid + ".jsonl",
+			ProjectPath: "/proj/alpha", StartedAt: 1000, EndedAt: 2000,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := st.AppendBlocks(id, blocks, index.Watermark{Size: 1, MTime: 1, Offset: 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seed("t1", []model.Block{{Seq: 0, Kind: model.KindToolUse, ToolName: "Bash", Body: "{}"}})
+	seed("t2", []model.Block{
+		{Seq: 0, Kind: model.KindToolUse, ToolName: "Edit", Body: "{}"},
+		{Seq: 1, Kind: model.KindToolUse, ToolName: "Edit", Body: "{}"},
+	})
+
+	now := time.Unix(1_700_000_000, 0)
+	mux := http.NewServeMux()
+	(&httpapi.Server{Engine: search.NewEngine(st.DB()), Store: st, Now: func() time.Time { return now }}).Register(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	var got []search.ToolStat
+	if code := getJSON(t, srv.URL+"/api/tools", &got); code != 200 {
+		t.Fatalf("状态码 = %d", code)
+	}
+	want := []search.ToolStat{{ToolName: "Edit", Blocks: 2}, {ToolName: "Bash", Blocks: 1}}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("tools = %v, want %v（块数降序）", got, want)
+	}
+
+	// 库里多了一个工具：10 分钟内仍回旧列表（缓存），过期后才看到它
+	seed("t3", []model.Block{
+		{Seq: 0, Kind: model.KindToolUse, ToolName: "Grep", Body: "{}"},
+		{Seq: 1, Kind: model.KindToolUse, ToolName: "Grep", Body: "{}"},
+		{Seq: 2, Kind: model.KindToolUse, ToolName: "Grep", Body: "{}"},
+	})
+	now = now.Add(9 * time.Minute)
+	getJSON(t, srv.URL+"/api/tools", &got)
+	if len(got) != 2 {
+		t.Errorf("9 分钟内应仍是缓存的 2 项，实际 %v", got)
+	}
+	now = now.Add(2 * time.Minute)
+	getJSON(t, srv.URL+"/api/tools", &got)
+	if len(got) != 3 || got[0].ToolName != "Grep" {
+		t.Errorf("11 分钟后应重算并以 Grep(3) 居首，实际 %v", got)
 	}
 }

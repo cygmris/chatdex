@@ -51,9 +51,11 @@ var knownPaths = []KnownPath{
 	{"Claude Code", ".claude/projects", "全部会话，以及每个项目的 memory/", false, 10},
 	{"Codex", ".codex/sessions", "全部会话", false, 11},
 
-	// —— 最要命的那一个
+	// —— 最要命的：丢了就真没了
 	{"Codex", ".codex/memories", "Codex 的记忆：MEMORY.md、按会话的 rollout_summaries。" +
 		"它虽是 git 仓，但通常只有本地提交、没有远端——丢了就真没了", false, 20},
+	{"Grok", ".grok/memory-v2", "Grok 的记忆：global/ 与各工作区的 topics、observations。" +
+		"不是 git 仓——丢了就真没了", false, 21},
 
 	// —— 你写的东西：丢了要重写
 	{"Claude Code", ".claude/CLAUDE.md", "全局指令（跨全部项目生效）", false, 30},
@@ -64,6 +66,7 @@ var knownPaths = []KnownPath{
 	{"Codex", ".codex/agents", "自建 subagent", false, 51},
 	{"Claude Code", ".claude/commands", "自建 slash command", false, 60},
 	{"Claude Code", ".claude/hooks", "钩子脚本", false, 61},
+	{"Claude Code", ".claude/jobs", "后台任务的状态与时间线，以及 tmp/ 里手写的 sql/sh/py/mjs——实测 794 个文件只占 11 MB。需配 exclude_larger_than，否则会连 216 MB 可再生的数据集一起备", false, 62},
 
 	// —— 配置：重装能重配，但会很烦
 	{"Claude Code", ".claude/settings.json", "设置（模型、钩子、插件开关）", false, 70},
@@ -73,6 +76,13 @@ var knownPaths = []KnownPath{
 	{"Grok", ".grok/sessions", "全部会话", false, 12},
 	{"Grok", ".grok/skills", "自建 skill", false, 42},
 	{"Grok", ".grok/config.toml", "配置", false, 72},
+
+	// —— Cursor CLI
+	{"Cursor", ".cursor/projects", "明文会话：*/agent-transcripts/**/*.jsonl", false, 13},
+	{"Cursor", ".cursor/chats", "会话原件：meta.json 与 store.db。检索读 projects 里的 jsonl；store.db 里大量 blob 是加密的", false, 14},
+	{"Cursor", ".cursor/skills", "自建 skill", false, 43},
+	{"Cursor", ".cursor/cli-config.json", "CLI 配置。含 authInfo", true, 73},
+	{"Cursor", ".cursor/mcp.json", "MCP 配置。含 Authorization 头", true, 74},
 }
 
 // knownExcluded 是**刻意不备**的东西，连同理由。
@@ -81,9 +91,17 @@ var knownPaths = []KnownPath{
 // 有测试断言 knownPaths 里不出现这些前缀。否则将来有人顺手加一条
 // `~/.claude/cache`，没有任何东西会拦住他。
 var knownExcluded = map[string]string{
-	".claude/cache":                  "缓存，可重建",
-	".claude/file-history":           "编辑历史，448 MB，可从 git 与会话还原",
-	".claude/shell-snapshots":        "每次会话的 shell 快照，派生物",
+	".claude/cache":           "缓存，可重建",
+	".claude/file-history":    "编辑历史，448 MB，可从 git 与会话还原",
+	".claude/shell-snapshots": "每次会话的 shell 快照，派生物",
+	// ⚠️ `.claude/jobs` **不在这份清单里**，它是要备的（见 knownPaths）。
+	// 它里面确实有 216 MB 可再生的大件（backfill_*/bf_* 145 MB、pkgs.zip、
+	// pg 全量导出 JSON，共 12 个），但那些**不靠这份清单排除**——
+	// 这份 map 的 key 是**路径**，而判据是**大小**：实测 tmp/ 里 763 个文件中
+	// 744 个（97.5%）只占 5.5 MB 且全是手写的 sql/sh/py/mjs，按目录排会把它们
+	// 一起丢掉。所以走 exclude_larger_than，不进这里。
+	// （别往这份 map 里塞「>1M 的文件」这类描述——key 不是真路径的话，
+	//   `k.Rel == bad` 那条断言对它永远不可能命中，等于一条不会红的记录。）
 	".codex/cache":                   "缓存，可重建",
 	".codex/memories_1.sqlite":       "记忆流水线的工作队列与中间产物，可从 memories/ 的 markdown 与会话重建；且它是 WAL 模式，只备 .sqlite 不带 -wal/-shm 会拿到撕裂的副本",
 	".codex/logs_2.sqlite":           "日志，247 MB，派生物",
@@ -95,6 +113,12 @@ var knownExcluded = map[string]string{
 	".grok/marketplace-cache": "插件市场缓存，可重建",
 	".grok/logs":              "日志，派生物",
 	".grok/memtrace":          "内存追踪，派生物",
+
+	".cursor/statsig-cache.json": "特性开关缓存，可重建",
+	".cursor/extensions":         "已装扩展，可重装",
+	".cursor/skills-cursor":      "上游同步的 skill，不是自建",
+	".cursor/ai-tracking":        "使用统计，派生物",
+	".config/cursor/auth.json":   "登录凭据，不代使用者决定要不要备份",
 }
 
 // Suggestion 是一条建议，带上它当前是否已被覆盖。

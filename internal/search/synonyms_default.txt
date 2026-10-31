@@ -1,0 +1,68 @@
+# chatdex 内置近义词表：通用开发词汇。
+#
+# 一行一组，组内空白分隔；同一个词出现在多组时取并集。查找不区分大小写、按整词。
+# 个人或项目专用的叫法写进 ~/.config/chatdex/synonyms.txt，与本表合并，改了即生效。
+#
+# 收词的判据：同一样东西、会话里确实会换着说。别收太泛的词（「提交」「版本」单独一个字面
+# 太常见，扩展进来只会把目标淹没），宁可收它们的复合词。
+
+hash sha 提交号 短提交 commit哈希 哈希
+版本号 version 发布号 release
+分支 branch
+合并 merge
+回滚 rollback revert 撤销提交
+仓库 repo repository
+远端 remote 远程仓库
+标签 tag
+
+部署 deploy 发布上线 上线
+构建 build 编译
+镜像 image docker镜像 容器镜像
+容器 container
+集群 cluster
+命名空间 namespace ns
+k8s kubernetes kubectl
+定时任务 cron crontab
+环境变量 env
+配置 config configuration
+密钥 secret 凭据 credential
+令牌 token
+证书 cert certificate tls
+
+数据库 database db
+postgres postgresql pg psql
+索引 index
+迁移 migration migrate
+事务 transaction
+死锁 deadlock
+慢查询 slow-query
+
+接口 api endpoint 端点
+路由 route router
+请求头 header
+回调 callback webhook
+鉴权 认证 auth authentication
+授权 authorization 权限 permission
+限流 rate-limit 429
+超时 timeout
+重试 retry
+并发 concurrency
+队列 queue
+
+日志 log logs
+报错 error 错误
+堆栈 stacktrace traceback
+内存泄漏 memory-leak oom
+崩溃 crash panic
+测试 test 单测 unit-test
+断言 assert assertion
+覆盖率 coverage
+
+前端 frontend
+后端 backend
+组件 component
+样式 css
+页面 page
+弹窗 modal dialog 对话框
+下拉框 select dropdown
+日期选择 datepicker date-picker 日期组件

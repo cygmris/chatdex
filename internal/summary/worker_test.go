@@ -113,7 +113,7 @@ func TestSummaryIsSearchableAsText(t *testing.T) {
 	}
 
 	// 摘要块不该混进会话回读（它不是对话的一部分）
-	v, err := e.GetSession(id, 0, 100)
+	v, err := e.GetSession(id, search.SessionQuery{Limit: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +144,7 @@ func TestSummaryDoesNotCreatePhantomPage(t *testing.T) {
 	}
 
 	e := search.NewEngine(st.DB())
-	v, err := e.GetSession(id, 0, page)
+	v, err := e.GetSession(id, search.SessionQuery{Limit: page})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +171,7 @@ func TestSummaryDoesNotCreatePhantomPage(t *testing.T) {
 	}, index.Watermark{Size: 2, MTime: 2, Offset: 2}); err != nil {
 		t.Fatal(err)
 	}
-	v2, err := e.GetSession(id, 0, 100)
+	v2, err := e.GetSession(id, search.SessionQuery{Limit: 100})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -37,12 +37,14 @@
     const list = res.sessions || [];
     if (!list.length) {
       root.innerHTML = res.no_match
-        ? '<p class="hint">无命中。换个说法试试——检索按关键词字面匹配，不会返回近似结果。</p>'
+        ? `<p class="hint">无命中。${expandedText(res) ? '已同时搜了近义词（' + CD.esc(expandedText(res)) + '），' : ''}换个说法试试——检索按关键词字面匹配，近义词在 ~/.config/chatdex/synonyms.txt 里加。</p>`
         : '<p class="hint">没有符合条件的会话。</p>';
       return;
     }
 
+    const exp = expandedText(res);
     root.innerHTML =
+      (exp ? `<p class="hint expanded">也搜了：${CD.esc(exp)}</p>` : '') +
       list.map((s) => {
         // 主标题优先用户 /rename 的名字，其次摘要；都没有才退回片段
         const sub = CD.sessionSubtitle(s);
@@ -60,6 +62,8 @@
           <div class="foot">
             <span class="badge">${CD.sourceLabel(s.source)}</span>
             ${s.is_sub ? '<span class="badge sub">子代理</span>' : ''}
+            ${s.alive === false ? '<span class="badge gone" title="源文件已被清理，内容来自索引">源已消失</span>' : ''}
+            ${s.via_synonym ? '<span class="badge syn" title="这条的最佳命中只用你输入的原词匹配不上，至少有一个词是靠近义词补上的">近义词命中</span>' : ''}
             <span class="path">${CD.esc(s.project_path || '（未知项目）')}</span>
             <span>${CD.fmtRange(s.started_at, s.ended_at)}</span>
             <span>${s.msg_count} 条</span>
@@ -80,6 +84,11 @@
     const more = CD.$('more');
     if (prev) prev.onclick = () => { offset = Math.max(0, offset - PAGE); load(); };
     if (more) more.onclick = () => { offset += PAGE; load(); };
+  }
+
+  // 「hash → 提交号、SHA；版本号 → version」；没有扩展时返回空串
+  function expandedText(res) {
+    return (res.expanded || []).map((e) => `${e.term} → ${(e.also || []).join('、')}`).join('；');
   }
 
   CD.register('search', { mount, refresh });

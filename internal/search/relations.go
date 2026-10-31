@@ -26,7 +26,7 @@ func (e *Engine) Children(id int64, limit int) ([]SessionHit, int, error) {
 	err := e.db.QueryRow(`
 SELECT COUNT(*) FROM sessions c
 JOIN sessions p ON p.session_uid = c.parent_uid
-WHERE p.id = ? AND c.alive = 1`, id).Scan(&total)
+WHERE p.id = ?`, id).Scan(&total)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -35,12 +35,12 @@ WHERE p.id = ? AND c.alive = 1`, id).Scan(&total)
 	}
 
 	rows, err := e.db.Query(`
-SELECT c.id, c.source, c.session_uid, c.file_path, c.project_path,
+SELECT c.id, c.source, c.session_uid, c.file_path, c.alive, c.project_path,
        c.started_at, c.ended_at, c.msg_count,
        COALESCE(c.summary, ''), c.summary_model, c.summary_at, c.title
 FROM sessions c
 JOIN sessions p ON p.session_uid = c.parent_uid
-WHERE p.id = ? AND c.alive = 1
+WHERE p.id = ?
 ORDER BY c.started_at ASC
 LIMIT ?`, id, limit)
 	if err != nil {
@@ -51,7 +51,7 @@ LIMIT ?`, id, limit)
 	var out []SessionHit
 	for rows.Next() {
 		var h SessionHit
-		if err := rows.Scan(&h.ID, &h.Source, &h.SessionUID, &h.FilePath, &h.ProjectPath,
+		if err := rows.Scan(&h.ID, &h.Source, &h.SessionUID, &h.FilePath, &h.Alive, &h.ProjectPath,
 			&h.StartedAt, &h.EndedAt, &h.MsgCount,
 			&h.Summary, &h.SummaryModel, &h.SummaryAt, &h.Title); err != nil {
 			return nil, 0, err
@@ -64,23 +64,24 @@ LIMIT ?`, id, limit)
 
 // Parent 返回某子代理的主会话。
 //
-// 三种情形都返回 (nil, nil)：不是子代理、主会话不在索引里、主会话已下线。
+// 两种情形都返回 (nil, nil)：不是子代理、主会话不在索引里。
 // 实测 1554 个子代理的 parent_uid 100% 能对上，但索引可以被部分删除，
 // 所以缺失是正常状态而不是错误——页面据此只标身份、不给死链。
+// 主会话源文件已消失（alive=0）**不算缺失**：它的正文还在索引里，照样返回，Alive=false 标出（R26）。
 func (e *Engine) Parent(id int64) (*SessionHit, error) {
 	var h SessionHit
 	err := e.db.QueryRow(`
-SELECT p.id, p.source, p.session_uid, p.file_path, p.project_path,
+SELECT p.id, p.source, p.session_uid, p.file_path, p.alive, p.project_path,
        p.started_at, p.ended_at, p.msg_count,
        COALESCE(p.summary, ''), p.summary_model, p.summary_at, p.title
 FROM sessions c
 JOIN sessions p ON p.session_uid = c.parent_uid
-WHERE c.id = ? AND c.parent_uid != '' AND p.alive = 1`, id).
-		Scan(&h.ID, &h.Source, &h.SessionUID, &h.FilePath, &h.ProjectPath,
+WHERE c.id = ? AND c.parent_uid != ''`, id).
+		Scan(&h.ID, &h.Source, &h.SessionUID, &h.FilePath, &h.Alive, &h.ProjectPath,
 			&h.StartedAt, &h.EndedAt, &h.MsgCount,
 			&h.Summary, &h.SummaryModel, &h.SummaryAt, &h.Title)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil // 三种情形同义：不是子代理 / 主会话不在索引里 / 主会话已下线
+		return nil, nil // 两种情形同义：不是子代理 / 主会话不在索引里
 	}
 	if err != nil {
 		return nil, err // 真出错要报出来，别和"没有父会话"混为一谈

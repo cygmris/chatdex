@@ -53,6 +53,15 @@
       </div>`;
 
     bindSources();
+    root.querySelectorAll('[data-combo-key]').forEach((host) => {
+      const f = fields.find((x) => x.key === host.dataset.comboKey);
+      const hidden = host.nextElementSibling;
+      CD.combo.mount(host, {
+        options: f.options.map((o) => ({ value: o, label: o })), value: hidden.value,
+        btnId: host.id.replace(/-combo$/, ''), search: f.options.length >= 8,
+        onChange: (v) => { hidden.value = v; hidden.dispatchEvent(new Event('change')); },
+      });
+    });
     root.querySelectorAll('[data-key]:not([data-kind="sources-part"])').forEach((el) => {
       el.oninput = el.onchange = () => {
         dirty[el.dataset.key] = el.type === 'checkbox' ? el.checked
@@ -122,9 +131,10 @@
     if (f.kind === 'bool') {
       input = `<input type="checkbox" id="${id}" data-key="${f.key}" data-kind="bool" ${v ? 'checked' : ''}>`;
     } else if (f.kind === 'enum' && (f.options || []).length) {
-      input = `<select id="${id}" data-key="${f.key}" data-kind="enum">
-        ${f.options.map((o) => `<option value="${CD.esc(o)}"${o === v ? ' selected' : ''}>${CD.esc(o)}</option>`).join('')}
-      </select>`;
+      // 自研下拉（combo.js）。真正的值放在 hidden input 上：下面按 [data-key] 收集与标脏的逻辑一个字不改。
+      // 按钮拿 id，<label for> 仍能聚焦到它。
+      input = `<div class="combo" id="${id}-combo" data-combo-key="${CD.esc(f.key)}"></div>
+        <input type="hidden" data-key="${f.key}" data-kind="enum" value="${CD.esc(v)}">`;
     } else if (f.kind === 'enum') {
       // 模型列表拿不到时退化为文本输入，而不是给一个空下拉（需求 4.7）
       input = `<input type="text" id="${id}" data-key="${f.key}" data-kind="string" value="${CD.esc(v)}">`;

@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -209,5 +210,77 @@ func TestOnlySummaryLineIsParsed(t *testing.T) {
 {"message_type":"status","percent_done":0.9}`)
 	if _, ok := parseSummary(out); ok {
 		t.Error("只有进度行时不该认为拿到了备份结果")
+	}
+}
+
+// exclude_larger_than 必须真的落到 restic 的命令行上。
+//
+// 判据刻意不是「Backup 返回成功」——那条对本功能永远绿：不传这个 flag 时备份
+// 同样成功，只是多备了几百 MB。所以用一个**把参数录下来的假 restic**，
+// 断言 --exclude-larger-than 真的出现在 argv 里，且排在源路径之前
+// （restic 要求 flag 在位置参数前，顺序错会被当成路径）。
+func TestExcludeLargerThanReachesResticArgv(t *testing.T) {
+	dir := t.TempDir()
+	argvFile := filepath.Join(dir, "argv")
+	bin := filepath.Join(dir, "restic")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + argvFile + `
+echo '{"message_type":"summary","snapshot_id":"deadbeef","total_files_processed":1,"data_added":1,"total_duration":0.1}'
+`
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	src := filepath.Join(dir, "src")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pw := filepath.Join(dir, "pw")
+	if err := os.WriteFile(pw, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := Config{
+		Repo: filepath.Join(dir, "repo"), PasswordFile: pw, ResticPath: bin,
+		Sources:           []Source{{Path: src, Enabled: true}},
+		ExcludeLargerThan: "1M",
+	}
+	if _, err := (&Runner{Cfg: func() Config { return cfg }}).Backup(context.Background()); err != nil {
+		t.Fatalf("备份失败：%v", err)
+	}
+
+	raw, err := os.ReadFile(argvFile)
+	if err != nil {
+		t.Fatalf("假 restic 没记下参数：%v", err)
+	}
+	args := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
+	iFlag, iSrc := -1, -1
+	for i, a := range args {
+		switch a {
+		case "--exclude-larger-than":
+			iFlag = i
+		case src:
+			iSrc = i
+		}
+	}
+	if iFlag < 0 {
+		t.Fatalf("argv 里没有 --exclude-larger-than：%v", args)
+	}
+	if iFlag+1 >= len(args) || args[iFlag+1] != "1M" {
+		t.Errorf("flag 的值不对：%v", args)
+	}
+	if iSrc < 0 {
+		t.Fatalf("argv 里没有源路径：%v", args)
+	}
+	if iFlag > iSrc {
+		t.Errorf("flag 排在源路径之后了，restic 会把它当路径：%v", args)
+	}
+
+	// 反面：不配的时候不该凭空出现这个 flag
+	cfg.ExcludeLargerThan = ""
+	if _, err := (&Runner{Cfg: func() Config { return cfg }}).Backup(context.Background()); err != nil {
+		t.Fatalf("备份失败：%v", err)
+	}
+	raw, _ = os.ReadFile(argvFile)
+	if strings.Contains(string(raw), "--exclude-larger-than") {
+		t.Errorf("没配却传了这个 flag：%s", raw)
 	}
 }

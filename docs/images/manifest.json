@@ -1,0 +1,85 @@
+{
+  "taken_at": "2026-10-31T21:36:25.792Z",
+  "ui_digest": "f26d9b2dba51f77f",
+  "viewport": {
+    "width": 1440,
+    "height": 900,
+    "dpr": 1
+  },
+  "theme": {
+    "mode": "light",
+    "light": "desk"
+  },
+  "shots": [
+    {
+      "file": "search.png",
+      "view": "search",
+      "state": "q=限流"
+    },
+    {
+      "file": "search-filters.png",
+      "view": "search",
+      "state": "q=go test · 仅工具调用 · 工具=Bash"
+    },
+    {
+      "file": "sidebar-mini.png",
+      "view": "search",
+      "state": "q=限流，左栏收起"
+    },
+    {
+      "file": "timeline.png",
+      "view": "timeline",
+      "state": "时间线首页"
+    },
+    {
+      "file": "digest.png",
+      "view": "digest",
+      "state": "摘要列表首页"
+    },
+    {
+      "file": "settings.png",
+      "view": "settings",
+      "state": "设置页"
+    },
+    {
+      "file": "reader.png",
+      "view": "search",
+      "state": "回读：令牌桶会话定位到 #5（Write bucket.go）"
+    },
+    {
+      "file": "reader-highlight.png",
+      "view": "search",
+      "state": "回读：#17 的 mermaid 已渲染"
+    },
+    {
+      "file": "output-highlight.png",
+      "view": "search",
+      "state": "回读：sed 读文件的输出按 Go 高亮"
+    },
+    {
+      "file": "subagents.png",
+      "view": "search",
+      "state": "回读：主会话展开 5 个子代理"
+    },
+    {
+      "file": "chat.png",
+      "view": "chat",
+      "state": "问一问：范围 api-gateway，「限流为什么选令牌桶而不是滑动窗口?」"
+    },
+    {
+      "file": "progress.png",
+      "view": "progress",
+      "state": "生成进度：两条失败（临时造的）"
+    },
+    {
+      "file": "backup.png",
+      "view": "backup",
+      "state": "备份：两个会话源没了但备份里有（临时造的）"
+    },
+    {
+      "file": "archived.png",
+      "view": "search",
+      "state": "回读：源文件已删，从备份读原件（临时造的）"
+    }
+  ]
+}

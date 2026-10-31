@@ -118,6 +118,7 @@
         没变的内容不会重复占空间——实测无变化时再备一次只要 767 ms。</p>
       ${last ? lastResult() : ''}
       ${autoResult()}
+      ${indexResult()}
     </section>`;
   }
 
@@ -136,6 +137,20 @@
     }
     return `<div class="bk-last ok">上次自动备份 ${when} · 新增 ${a.files_new} 个文件 ·
       写入 ${CD.fmtBytes(a.bytes_added)}</div>`;
+  }
+
+  /* 索引库自身的快照（每天一次那份）。它备的是「源文件已消失会话的正文 + 全部摘要」，
+   * 这些只存在于索引库里——用户曾以为它"早就在 R2 里"，而实际仓库里一次都没有过（R27）。
+   * 所以三态都要显式：没生成过也要说，不能留白让人继续以为有。 */
+  function indexResult() {
+    if (!st.available) return '';
+    const a = st.last_index;
+    if (!a) return `<div class="bk-last muted">索引库快照：尚未生成（每天最多一次，随下一次备份）</div>`;
+    const when = CD.fmtTime(Math.floor(new Date(a.at).getTime() / 1000));
+    if (a.error) {
+      return `<div class="bk-last warn"><strong>索引库快照失败</strong>（${when}）：${CD.esc(a.error)}</div>`;
+    }
+    return `<div class="bk-last ok">索引库快照 ${when} · 写入 ${CD.fmtBytes(a.bytes_added)}（去重后）</div>`;
   }
 
   function lastResult() {

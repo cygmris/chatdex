@@ -293,7 +293,12 @@ func (w *Worker) loadMessages(sessionID int64) ([]search.Message, int, error) {
 	var all []search.Message
 	from, total := 0, 0
 	for {
-		v, err := w.Engine.GetSession(sessionID, from, pageSize)
+		q := search.SessionQuery{Limit: pageSize}
+		if from > 0 {
+			at := from
+			q.AtSeq = &at // 从上一页末条的下一条起读
+		}
+		v, err := w.Engine.GetSession(sessionID, q)
 		if err != nil {
 			return nil, 0, err
 		}

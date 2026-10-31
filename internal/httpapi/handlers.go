@@ -63,7 +63,16 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v := r.URL.Query()
-	view, err := s.Engine.GetSession(id, int(atoi64(v.Get("from"))), int(atoi64(v.Get("limit"))))
+	q := search.SessionQuery{
+		Offset: int(atoi64(v.Get("from"))), Limit: int(atoi64(v.Get("limit"))),
+		Kinds: search.ParseKinds(v.Get("kinds")),
+	}
+	// seq=：回读页要「包含这条的那一页」（对齐页首），而不是从它开始读
+	if v.Has("seq") {
+		at := int(atoi64(v.Get("seq")))
+		q.AtSeq, q.Align = &at, true
+	}
+	view, err := s.Engine.GetSession(id, q)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, "会话不存在")
 		return
@@ -210,6 +219,31 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, ps)
+}
+
+// toolsTTL 是工具名列表的缓存时长。工具名的集合变得很慢（新工具出现才变），
+// 十分钟内看到旧列表没有代价；每次都算则每次打开下拉都要等 0.7 s。
+const toolsTTL = 10 * time.Minute
+
+func (s *Server) handleTools(w http.ResponseWriter, r *http.Request) {
+	now := time.Now
+	if s.Now != nil {
+		now = s.Now
+	}
+	s.toolsMu.Lock()
+	defer s.toolsMu.Unlock()
+	if s.tools == nil || now().Sub(s.toolsAt) >= toolsTTL {
+		list, err := s.Engine.Tools()
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if list == nil {
+			list = []search.ToolStat{} // 空库也回 []，不回 null
+		}
+		s.tools, s.toolsAt = list, now()
+	}
+	writeJSON(w, http.StatusOK, s.tools)
 }
 
 // statsResponse 在索引统计之上带出摘要进度，供 dashboard 顶部展示。

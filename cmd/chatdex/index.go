@@ -23,6 +23,7 @@ func openIndex(cfg config.Config) (*index.Store, *index.Scanner, error) {
 			parser.Claude{Home: cfg.Home},
 			parser.Codex{Home: cfg.Home},
 			parser.Grok{Home: cfg.Home},
+			parser.CursorCLI{Home: cfg.Home},
 		),
 		Cfg:       cfg.Index,
 		ScanRoots: cfg.Scan.Roots,

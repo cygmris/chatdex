@@ -232,6 +232,24 @@ func TestScanRootsRoundTripAndRejectsRelative(t *testing.T) {
 	}
 }
 
+// Save 只写出 Fields() 里的键。exclude_larger_than 必须在元信息里，
+// 否则一次设置保存会把它从 config.json 抹掉，重启后上限消失。
+func TestSaveKeepsExcludeLargerThan(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	c := Default()
+	c.Backup.ExcludeLargerThan = "1M"
+	if err := Save(path, c); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Backup.ExcludeLargerThan != "1M" {
+		t.Fatalf("exclude_larger_than 存盘后丢了，实得 %q", got.Backup.ExcludeLargerThan)
+	}
+}
+
 func TestSaveHandlesNonComparableValues(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	c := Default()

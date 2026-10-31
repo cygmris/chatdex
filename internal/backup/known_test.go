@@ -175,6 +175,86 @@ func TestCoversHandlesEveryPathRelation(t *testing.T) {
 	}
 }
 
+// Grok 的记忆与 Codex 的 memories 同一档：建议表必须认识它，
+// 否则备份页不会提示漏备，而它不在 sessions 下面，现有源罩不住。
+func TestGrokMemoryV2IsAKnownBackupPath(t *testing.T) {
+	var got *KnownPath
+	var memPrio int
+	for i := range knownPaths {
+		switch knownPaths[i].Rel {
+		case ".grok/memory-v2":
+			got = &knownPaths[i]
+		case ".codex/memories":
+			memPrio = knownPaths[i].Priority
+		}
+	}
+	if got == nil {
+		t.Fatal("knownPaths 没有 .grok/memory-v2")
+	}
+	if got.Agent != "Grok" {
+		t.Errorf("Agent = %q，想要 Grok", got.Agent)
+	}
+	if got.Secrets {
+		t.Error(".grok/memory-v2 不是凭据，不该标 Secrets")
+	}
+	if got.Priority != memPrio+1 {
+		t.Errorf("priority = %d，想要紧挨 .codex/memories（%d）之后", got.Priority, memPrio)
+	}
+}
+
+// Cursor 的明文会话在 projects 下，原件在 chats 下，两边都要进建议表。
+// cli-config.json 与 mcp.json 含凭据，必须标出来，不能无声建议备份。
+func TestCursorPathsAreKnownAndSecretsAreMarked(t *testing.T) {
+	var projects, chats, skills, cli, mcp *KnownPath
+	var grokSessions, grokSkills int
+	for i := range knownPaths {
+		switch knownPaths[i].Rel {
+		case ".cursor/projects":
+			projects = &knownPaths[i]
+		case ".cursor/chats":
+			chats = &knownPaths[i]
+		case ".cursor/skills":
+			skills = &knownPaths[i]
+		case ".cursor/cli-config.json":
+			cli = &knownPaths[i]
+		case ".cursor/mcp.json":
+			mcp = &knownPaths[i]
+		case ".grok/sessions":
+			grokSessions = knownPaths[i].Priority
+		case ".grok/skills":
+			grokSkills = knownPaths[i].Priority
+		}
+	}
+	for _, k := range []*KnownPath{projects, chats, skills, cli, mcp} {
+		if k == nil || k.Agent != "Cursor" {
+			t.Fatalf("缺 Cursor 路径或 Agent 不对：%+v", k)
+		}
+	}
+	if projects.Secrets || chats.Secrets || skills.Secrets {
+		t.Error("projects / chats / skills 不是凭据文件，不该标 Secrets")
+	}
+	if !cli.Secrets || !mcp.Secrets {
+		t.Error("cli-config.json 与 mcp.json 含凭据，必须标 Secrets")
+	}
+	if projects.Priority != grokSessions+1 || chats.Priority != grokSessions+2 {
+		t.Errorf("会话优先级 = %d/%d，想要紧挨 .grok/sessions（%d）之后", projects.Priority, chats.Priority, grokSessions)
+	}
+	if skills.Priority != grokSkills+1 {
+		t.Errorf("skills 优先级 = %d，想要紧挨 .grok/skills（%d）之后", skills.Priority, grokSkills)
+	}
+	for _, rel := range []string{
+		".cursor/statsig-cache.json",
+		".cursor/extensions",
+		".cursor/skills-cursor",
+		".cursor/ai-tracking",
+		".config/cursor/auth.json",
+	} {
+		if _, ok := knownExcluded[rel]; !ok {
+			t.Errorf("派生或凭据路径 %s 不在排除清单里", rel)
+		}
+	}
+}
+
 // home 取不到时返回空，不报错——与「可选依赖不可用就降级」同一模式。
 func TestSuggestDegradesWithoutHome(t *testing.T) {
 	if got := Suggest("", nil); got != nil {

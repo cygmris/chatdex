@@ -44,6 +44,7 @@
           <div class="foot">
             <span class="badge">${CD.sourceLabel(s.source)}</span>
             ${s.is_sub ? '<span class="badge sub">子代理</span>' : ''}
+            ${s.alive === false ? '<span class="badge gone" title="源文件已被清理，内容来自索引">源已消失</span>' : ''}
             <span class="path">${CD.esc(s.project_path || '（未知项目）')}</span>
             <span>${CD.fmtRange(s.started_at, s.ended_at)}</span>
             <span>${s.msg_count} 条</span>

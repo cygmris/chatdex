@@ -1,7 +1,7 @@
 // Package model 定义 chatdex 的内部统一消息模型。
 //
-// 这里的类型刻意不认识任何一种 JSONL 结构：解析器负责把 Claude Code 与 Codex
-// 的两套格式翻译成这些类型，索引与检索层只依赖这些类型。
+// 这里的类型刻意不认识任何一种 JSONL 结构：解析器负责把各家工具的会话格式
+// 翻译成这些类型，索引与检索层只依赖这些类型。
 package model
 
 // Source 是会话的来源工具。
@@ -11,6 +11,7 @@ const (
 	SourceClaude Source = "claude"
 	SourceCodex  Source = "codex"
 	SourceGrok   Source = "grok"
+	SourceCursor Source = "cursor"
 )
 
 // Kind 是一个内容块的类型，用于检索时按类型收窄。

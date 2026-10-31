@@ -12,14 +12,48 @@ Linux 用 `systemd --user`，macOS 用用户级 `launchd`（`~/Library/LaunchAge
 | 二进制 | `~/.local/bin/chatdex` |
 | Linux systemd unit | `~/.config/systemd/user/chatdex.service`（源文件在仓库 `deploy/systemd/`） |
 | macOS launchd plist | `~/Library/LaunchAgents/dev.cygmris.chatdex.plist`（模板在 `deploy/launchd/`） |
-| 索引库 | `~/.local/share/chatdex/index.db`（`0600`，目录 `0700`） |
+| 索引库 | 默认 `~/.local/share/chatdex/index.db`（`0600`，目录 `0700`）；可用 `config.json` 的 `db_path` 改，改后需重启 |
 | 配置（可选） | `~/.config/chatdex/config.json`（缺文件即用默认值，`0600`，目录 `0700`） |
 | macOS 日志 | `~/Library/Logs/chatdex/stdout.log`、`stderr.log`（目录须事先创建，launchd 不会建父目录） |
-| 会话来源（只读） | `~/.claude/projects/`、`~/.codex/sessions/`、`~/.grok/sessions/` |
+| 会话来源（只读） | `~/.claude/projects/`、`~/.codex/sessions/`、`~/.grok/sessions/`、`~/.cursor/projects/` |
 | dashboard | http://127.0.0.1:5021 |
 | API + MCP | http://127.0.0.1:5022 |
 
 chatdex **只读**原始会话文件，不会写入、改名或删除它们。卸载服务也不会动会话源文件、索引库或配置。
+
+### 索引库自身的备份与恢复（R27）
+
+索引库里有两样**只存在于它里面**的东西：源文件已被 CLI 清理的会话正文、全部摘要。所以备份时它自己也会进仓库：
+每天最多一次，生成一致快照 `<索引库目录>/snapshot/index.db`，单独一次 `restic backup --tag chatdex-index`
+（不受 `exclude_larger_than` 影响），异地镜像自然跟上。设置页开关 `backup.index_snapshot`（默认开）；
+备份页显示最近一次的时间与写入量。
+
+恢复（都实跑过）：
+
+```bash
+export RESTIC_PASSWORD_FILE=~/.config/chatdex/backup-pass
+restic -r /agentdata/backups/chatdex snapshots --tag chatdex-index          # 看有哪些
+restic -r /agentdata/backups/chatdex restore latest --tag chatdex-index --target /tmp/x   # 4 GB 实测 8 秒
+sqlite3 /tmp/x/<原快照目录路径>/index.db 'PRAGMA quick_check;'            # 应为 ok
+# 然后把它放到 db_path 指向的位置（服务先停），或直接改 db_path 指过去，重启
+```
+
+### 🔴 btrfs 上：索引库别放根分区，目录先 `chattr +C`
+
+SQLite 按 4 KB 页随机改写，在 btrfs 的 CoW 上**每写一页就分配一个新 extent、释放一个旧的**。
+实测一个 5.6 GB 的索引库积到 **1 123 983 个 extent**，元数据树 18 GB；而 btrfs 一旦在写出元数据时
+弃事务（write time tree block corruption，硬件或内核层面的错误都会走到这一步），被打成只读的是
+**承载它的整个文件系统**——放在根分区上就是整台机器。
+
+```bash
+mkdir -p /data/chatdex && chattr +C /data/chatdex          # 新建的文件继承 nodatacow
+sqlite3 ~/.local/share/chatdex/index.db "VACUUM INTO '/data/chatdex/index.db'"   # 一致快照，顺带压实
+chmod 600 /data/chatdex/index.db
+# config.json 加 "db_path": "/data/chatdex/index.db"，然后重启服务
+```
+
+`+C` 只对之后新建的文件生效，所以要 `VACUUM INTO` 而不是 `mv`。代价：该文件失去 btrfs 校验和与压缩——
+SQLite 库靠自己的结构保一致性，可接受。实测搬完 2 个 extent。
 
 ## Linux systemd 与 macOS launchd 对照
 
@@ -165,7 +199,7 @@ chatdex index              # 手动跑一轮索引（服务在跑时会被拒绝
 
 ### 索引范围（`scan.roots`）
 
-空（默认）= 扫各解析器的会话目录：`~/.claude/projects`、`~/.codex/sessions`、`~/.grok/sessions`。
+空（默认）= 扫各解析器的会话目录：`~/.claude/projects`、`~/.codex/sessions`、`~/.grok/sessions`、`~/.cursor/projects`。
 
 非空 = **只扫列出的真实目录**，不在范围内的已索引会话会被标为失效。每条必须是绝对路径，并且仍须落在解析器认识的树下（`home` 决定前缀，例如 `~/.claude/projects/<项目>`），否则文件会被扫到但不索引。
 

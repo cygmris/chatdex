@@ -714,11 +714,11 @@ CD.sessionSubtitle = (s) => ((s.title || '').trim() && (s.summary || '').trim())
  * ⇒ 改成查表：新来源没登记就原样显示大写值，宁可露出 `GROK` 这种未加工的字样，
  * 也不能安静地冒充成别的来源。
  */
-const SOURCE_LABELS = { claude: 'CLAUDE', codex: 'CODEX', grok: 'GROK' };
+const SOURCE_LABELS = { claude: 'CLAUDE', codex: 'CODEX', grok: 'GROK', cursor: 'CURSOR' };
 CD.sourceLabel = (src) => SOURCE_LABELS[src] || String(src || '').toUpperCase() || '—';
 
 // 回读页用的是首字母大写的写法，与徽章的全大写并存是刻意的：徽章要在列表里一眼扫到，正文头部要读着自然
-const SOURCE_NAMES = { claude: 'Claude', codex: 'Codex', grok: 'Grok' };
+const SOURCE_NAMES = { claude: 'Claude', codex: 'Codex', grok: 'Grok', cursor: 'Cursor' };
 CD.sourceName = (src) => SOURCE_NAMES[src] || String(src || '') || '—';
 
 CD.fmtTime = (u) =>
@@ -864,10 +864,10 @@ CD.setFilter = (patch) => {
 };
 
 CD.syncFilterInputs = () => {
-  for (const id of ['source', 'agent', 'kind', 'tool', 'from', 'to']) {
-    const el = CD.$(id);
-    if (el) el.value = CD.query[id] || '';
-  }
+  // 过滤栏的下拉全是自研 combo（combo.js），set 只回填显示、不触发 onChange
+  for (const id of ['project', 'source', 'agent', 'kind', 'tool']) CD.combos?.[id]?.set(CD.query[id] || '');
+  // 日期是自研的范围选择器（range-picker.js），它自己从 CD.query 回填
+  CD.range?.sync();
   const qi = CD.$('q');
   if (qi) qi.value = CD.query.q || '';
 };
@@ -1064,7 +1064,7 @@ CD.renderSide = () => {
       ).join('');
   } else {
     const proj = CD.projects.slice(0, 8).map((p) => {
-      const short = p.project_path.replace(/^\/home\/[^/]+\/(workflow|workspace)\//, '');
+      const short = CD.projectShort(p.project_path);
       return `<button class="side-nav${CD.query.project === p.project_path ? ' on' : ''}" data-project="${CD.esc(p.project_path)}" title="${CD.esc(p.project_path)}">
         <span class="t">${CD.esc(short)}</span><span class="n">${p.sessions}</span></button>`;
     }).join('');
@@ -1098,16 +1098,10 @@ CD.renderSide = () => {
       CD.route.write();
       CD.refresh();
     }));
+  // 与过滤栏的范围选择器同一个实现：日期按本地日历算。原先这里用 toISOString()
+  // 取日期——那是 UTC，本机 UTC+7 凌晨点「今天」填进去的是昨天。
   side.querySelectorAll('[data-days]').forEach((el) =>
-    (el.onclick = () => {
-      const d = new Date();
-      d.setDate(d.getDate() - (+el.dataset.days - 1));
-      CD.setFilter({ from: d.toISOString().slice(0, 10), to: '' });
-      CD.syncFilterInputs();
-      CD.renderSide();
-      CD.route.write();
-      CD.refresh();
-    }));
+    (el.onclick = () => CD.range.applyPreset(el.dataset.days === '1' ? 'today' : '7d')));
   side.querySelectorAll('[data-clear]').forEach((el) =>
     (el.onclick = () => {
       CD.setFilter({ project: '', from: '', to: '' });
@@ -1123,7 +1117,9 @@ async function loadStats() {
   try {
     const s = await CD.api('/api/stats');
     CD.$('stats').textContent =
-      `${s.sessions} 会话 · ${s.blocks} 块 · ${CD.fmtBytes(s.db_bytes)}`;
+      // 检索覆盖全部会话（含源文件已消失的），顶栏就得数全部——只数存活的会让
+      // 「2015 会话」与结果里出现的第 3000 个会话打架（R26）。
+      `${s.sessions + (s.dead_sessions || 0)} 会话${s.dead_sessions ? `（${s.dead_sessions} 源已消失）` : ''} · ${s.blocks} 块 · ${CD.fmtBytes(s.db_bytes)}`;
     // 回填而不是重新渲染：摘要在后台持续生成，每 10 秒重挂一次视图
     // 会把正在看的列表滚回顶部
     if (CD.summaryCount !== (s.summarized || 0)) {
@@ -1176,10 +1172,18 @@ function renderSummaryBar(s) {
   };
 }
 
+// 项目路径的显示名：去掉 ~/workflow、~/workspace 前缀。左栏 / 过滤栏 / 问一问范围共用这一个实现。
+CD.projectShort = (p) => String(p || '').replace(/^\/home\/[^/]+\/(workflow|workspace)\//, '');
+
+// 项目下拉的选项：全部 + 每个项目（带会话数）。loadProjects 与问一问页都从这里取，不各拼一份。
+CD.projectOptions = (allLabel = '全部') => [{ value: '', label: allLabel },
+  ...(CD.projects || []).map((p) => ({ value: p.project_path, label: CD.projectShort(p.project_path), hint: p.sessions }))];
+
 async function loadProjects() {
   try {
     CD.projects = (await CD.api('/api/projects')) || [];
     CD.renderSide();
+    CD.combos?.project?.setOptions(CD.projectOptions());
   } catch { /* 项目列表拿不到不影响检索 */ }
 }
 
@@ -1250,13 +1254,50 @@ CD.$('search-form').onsubmit = (e) => {
   else { CD.route.write(); CD.refresh(); }
 };
 
-for (const id of ['source', 'agent', 'kind', 'tool', 'from', 'to']) {
-  CD.$(id).onchange = () => {
-    CD.setFilter({ [id]: CD.$(id).value });
-    // 调过滤用 replace：连调五次不该要按五次后退才能退出去（需求 1.8）
-    CD.route.write({ replace: true });
-    CD.refresh();
-  };
+// 过滤栏的下拉（combo.js）。原生 <select> 不能输入即搜：项目实测 300 个、工具名 477 个，
+// 列全了翻不动、列前 N 个又选不到。**表是数据不是逻辑**：加一个筛选项只改这张表。
+// 选项文案与 range-btn 同一写法「筛的是什么：值」（决策 46）。
+const FILTER_COMBOS = {
+  project: { prefix: '项目：', empty: '全部', search: true, title: '按项目筛（可输入过滤）',
+    labelFor: (v) => CD.projectShort(v), placeholder: '输入项目名过滤…' },
+  source: { prefix: '来源：', empty: '全部', title: '来源', options: [
+    { value: '', label: '全部' }, { value: 'claude', label: 'Claude Code' }, { value: 'codex', label: 'Codex' },
+    { value: 'grok', label: 'Grok CLI' }, { value: 'cursor', label: 'Cursor CLI' }] },
+  agent: { empty: '主会话与子代理', title: '主会话 / 子代理', options: [
+    { value: '', label: '主会话与子代理' }, { value: 'main', label: '仅主会话' }, { value: 'sub', label: '仅子代理' }] },
+  kind: { prefix: '内容：', empty: '全部', title: '内容类型', options: [
+    { value: '', label: '全部' }, { value: 'user', label: '仅我说的' }, { value: 'assistant', label: '仅助手回答' },
+    { value: 'tool_use', label: '仅工具调用' }, { value: 'tool_result', label: '仅工具结果' },
+    { value: 'reasoning', label: '仅思考' }, { value: 'summary', label: '仅会话摘要' }] },
+  tool: { prefix: '工具：', empty: '全部', search: true, custom: true, title: '工具名，如 Bash；可直接输入', placeholder: '输入工具名…',
+    // 477 个工具名要聚合 2.36M 块（服务端缓存 10 分钟）：首次打开才拉，拉到了就不再拉
+    onOpen: (c) => {
+      if (c.loaded) return;
+      c.loaded = true;
+      CD.api('/api/tools')
+        .then((list) => c.setOptions([{ value: '', label: '全部' },
+          ...(list || []).map((t) => ({ value: t.tool_name, label: t.tool_name, hint: t.blocks }))]))
+        .catch(() => { c.loaded = false; });   // 拉失败仍可手敲（custom），下次打开再试
+    } },
+};
+function mountFilterCombos() {
+  for (const [id, spec] of Object.entries(FILTER_COMBOS)) {
+    const host = CD.$(id);
+    if (!host) continue;
+    CD.combo.mount(host, {
+      ...spec,
+      options: spec.options || [{ value: '', label: spec.empty }],
+      value: CD.query[id] || '',
+      onChange: (v) => {
+        CD.setFilter({ [id]: v });
+        if (id === 'project') CD.renderSide();   // 左栏项目高亮与过滤栏共用同一份 query
+        // 调过滤用 replace：连调五次不该要按五次后退才能退出去（需求 1.8）
+        CD.route.write({ replace: true });
+        CD.refresh();
+      },
+    });
+  }
+  if (CD.projects?.length) CD.combos.project?.setOptions(CD.projectOptions());
 }
 CD.$('filters-clear').onclick = () => {
   CD.query = { q: '', source: '', agent: '', kind: '', tool: '', project: '', from: '', to: '', page: '' };
@@ -1267,6 +1308,8 @@ CD.$('filters-clear').onclick = () => {
 };
 
 CD.boot = () => {
+  CD.range?.init();
+  mountFilterCombos();   // 必须先于 route.apply：它靠 syncFilterInputs 回填这些 combo
   // 就绪信号必须**先于挂载视图**建立。
   //
   // 这两行原本在 route.apply 之后，于是首个视图挂载时 CD.projectsReady 还是

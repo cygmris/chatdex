@@ -73,10 +73,23 @@ func (s *Server) handleArchived(w http.ResponseWriter, r *http.Request) {
 
 	// 复用回读视图的元信息（标题、项目、时间…），只把消息换成备份里的原件。
 	// 这样前端的渲染器一行都不用改。
-	view, err := s.Engine.GetSession(id, 0, 1)
+	view, err := s.Engine.GetSession(id, search.SessionQuery{Limit: 1})
 	if err != nil {
 		writeErr(w, http.StatusNotFound, "会话不存在")
 		return
+	}
+	// 与索引那条路同一套类型过滤：否则切到「看原件」工具块又全冒出来
+	kinds := search.ParseKinds(q.Get("kinds"))
+	visible := func(k model.Kind) bool {
+		if len(kinds) == 0 {
+			return true
+		}
+		for _, want := range kinds {
+			if string(k) == want {
+				return true
+			}
+		}
+		return false
 	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), archivedTimeout)
@@ -106,10 +119,13 @@ func (s *Server) handleArchived(w http.ResponseWriter, r *http.Request) {
 	}
 
 	msgs := make([]search.Message, 0, limit)
-	total := 0
+	total := 0 // 可见块数；from 是可见集里的偏移，与索引那条路同义
 	_, err = p.Parse(rc, view.FilePath, parser.Cursor{}, func(b model.Block) error {
+		if b.Seq < 0 || !visible(b.Kind) {
+			return nil
+		}
 		total++
-		if b.Seq >= from && len(msgs) < limit {
+		if total-1 >= from && len(msgs) < limit {
 			msgs = append(msgs, search.Message{
 				Seq: b.Seq, TS: b.TS, Kind: string(b.Kind),
 				ToolName: b.ToolName, ToolUseID: b.ToolUseID,

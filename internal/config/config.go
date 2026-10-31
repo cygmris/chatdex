@@ -74,9 +74,18 @@ type Backup struct {
 	ResticPath string `json:"restic_path"`
 	// Sources 是备份源列表，可任选其一或全部。
 	Sources []BackupSource `json:"sources"`
+	// ExcludeLargerThan 是单文件大小上限（restic 语法，如 "1M"）；空 = 不限。
+	// 用途见 backup.Config 同名字段的注释。
+	ExcludeLargerThan string `json:"exclude_larger_than"`
 	// AfterScan：每轮增量扫描之后顺手备一次。
 	// 实测无变化时 restic 只要 767 ms 且仓库零增长，所以这个开关很便宜。
 	AfterScan bool `json:"after_scan"`
+	// IndexSnapshot：备份时把索引库自身的一致快照也收进仓库（每天最多一次，在线备份 API 页对页复制）。
+	//
+	// 索引库是一部分内容的**唯一副本**——源文件已消失的会话正文与全部摘要
+	// 只存在于它里面，而 Sources 只列会话目录、ExcludeLargerThan 又会把 4 GB
+	// 的库直接过滤掉。实测 2026-09-29：仓库里 index.db 出现 0 次（R27）。
+	IndexSnapshot bool `json:"index_snapshot"`
 	// Mirror 是异地副本（S3/R2 等）的配置；Repo 为空 = 没有异地副本。
 	Mirror Mirror `json:"mirror"`
 }
@@ -159,6 +168,9 @@ func Default() Config {
 			// （Load 是先填默认再用文件覆盖），存量用户靠覆盖率页的
 			// 过期告警兜住。
 			AfterScan: true,
+			// 同 AfterScan 的理由：默认关的开关在真机上一次都不会跑。
+			// 代价是本机多一份 4 GB 文件、仓库每天多一份去重后的增量。
+			IndexSnapshot: true,
 		},
 		Home:   home,
 		DBPath: filepath.Join(home, ".local", "share", "chatdex", "index.db"),

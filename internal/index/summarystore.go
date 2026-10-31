@@ -57,8 +57,9 @@ SELECT s.id,
        CASE WHEN s.ended_at >= ? THEN 0 ELSE 1 END,
        'pending', 0, '', ?
 FROM sessions s
-WHERE s.alive = 1
-  AND s.msg_count > 0
+WHERE s.msg_count > 0
+  -- 不按 alive 过滤：摘要读的是 blocks（经 GetSession），与源文件在不在无关。
+  -- 之前按 alive 过滤，让消失的会话永远拿不到摘要——既搜不到、也没有转述层（R26）。
   AND (s.summary IS NULL
        OR s.msg_count > MAX(s.summary_msg_count * ?, s.summary_msg_count + ?))
   -- failed 也必须排除。少了它，下面的 ON CONFLICT 会把失败任务重置回 pending

@@ -21,14 +21,14 @@ func toolDefs() []llm.ToolDef {
 		{
 			Name: "search_sessions",
 			Description: "按关键词检索历史会话，返回会话 id、项目路径、命中片段与最佳命中位置。" +
-				"关键词是字面匹配，没命中就换个说法再试，不要直接回答找不到。",
+				"关键词是字面匹配（会按近义词表扩展），没命中就换个说法再试，不要直接回答找不到。",
 			Schema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"query":     map[string]any{"type": "string", "description": "关键词，中英皆可，多个词空格分隔"},
 					"kind":      map[string]any{"type": "string", "description": "可选：user/assistant/reasoning/tool_use/tool_result/summary"},
 					"tool_name": map[string]any{"type": "string", "description": "可选：工具名，如 Bash"},
-					"source":    map[string]any{"type": "string", "description": "可选：claude / codex / grok"},
+					"source":    map[string]any{"type": "string", "description": "可选：claude / codex / grok / cursor"},
 					"project":   map[string]any{"type": "string", "description": "可选：项目路径"},
 					"limit":     map[string]any{"type": "integer", "description": "可选：返回条数，最多 20"},
 				},
@@ -43,6 +43,7 @@ func toolDefs() []llm.ToolDef {
 				"properties": map[string]any{
 					"session_id": map[string]any{"type": "integer", "description": "会话 id"},
 					"from_seq":   map[string]any{"type": "integer", "description": "从第几条开始读"},
+					"kinds":      map[string]any{"type": "string", "description": "只读这些类型，逗号分隔，如 user,assistant；省略 = 全部"},
 					"limit":      map[string]any{"type": "integer", "description": "读几条，最多 50"},
 				},
 				"required": []string{"session_id"},

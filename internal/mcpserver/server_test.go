@@ -18,6 +18,13 @@ import (
 
 func newFixture(t *testing.T) (*search.Engine, int64) {
 	t.Helper()
+	_, e, id := newFixtureStore(t)
+	return e, id
+}
+
+// newFixtureStore 额外交出 Store，给需要直接改库状态（如 alive）的测试用。
+func newFixtureStore(t *testing.T) (*index.Store, *search.Engine, int64) {
+	t.Helper()
 	st, err := index.Open(filepath.Join(t.TempDir(), "index.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -39,7 +46,7 @@ func newFixture(t *testing.T) (*search.Engine, int64) {
 	if err := st.AppendBlocks(id, blocks, index.Watermark{Size: 1, MTime: 1, Offset: 1}); err != nil {
 		t.Fatal(err)
 	}
-	return search.NewEngine(st.DB()), id
+	return st, search.NewEngine(st.DB()), id
 }
 
 func connect(t *testing.T, engine *search.Engine) *mcp.ClientSession {
@@ -267,5 +274,91 @@ func TestLastSeqOnlyWhenThereIsMoreAfter(t *testing.T) {
 	}
 	if one.Sessions[0].LastSeq != 0 {
 		t.Errorf("只有一处命中时应省略 last_seq，实得 %d", one.Sessions[0].LastSeq)
+	}
+}
+
+// 源文件消失的会话要能搜到，且 alive 字段与工具描述都得把这件事说出来（R26）。
+func TestSearchMarksVanishedSessions(t *testing.T) {
+	st, engine, id := newFixtureStore(t)
+	sess := connect(t, engine)
+
+	// 先在源文件还在时断言 alive=true：只断言 false 会被零值骗过——
+	// 不透传这个字段，false 照样是 false（变异实测不咬后补的）。
+	var out mcpserver.SearchOutput
+	callJSON(t, sess, "search_sessions", mcpserver.SearchArgs{Query: "增量备份"}, &out)
+	if len(out.Sessions) != 1 || !out.Sessions[0].Alive {
+		t.Fatalf("源文件仍在时应 alive=true，实际 %+v", out.Sessions)
+	}
+	var v mcpserver.SessionOutput
+	callJSON(t, sess, "get_session", mcpserver.GetSessionArgs{SessionID: id}, &v)
+	if !v.Alive {
+		t.Fatalf("源文件仍在时 get_session 应 alive=true，实际 %+v", v)
+	}
+
+	if err := st.MarkDead("/sessions/u1.jsonl"); err != nil {
+		t.Fatal(err)
+	}
+	callJSON(t, sess, "search_sessions", mcpserver.SearchArgs{Query: "增量备份"}, &out)
+	if len(out.Sessions) != 1 || out.Sessions[0].Alive {
+		t.Fatalf("已消失的会话应命中且 alive=false，实际 %+v", out.Sessions)
+	}
+	callJSON(t, sess, "get_session", mcpserver.GetSessionArgs{SessionID: id}, &v)
+	if v.Alive || len(v.Messages) == 0 {
+		t.Errorf("get_session 应带 alive=false 且仍有正文，实际 alive=%v msgs=%d", v.Alive, len(v.Messages))
+	}
+
+	res, err := sess.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tl := range res.Tools {
+		if tl.Name == "search_sessions" && !strings.Contains(tl.Description, "alive=false") {
+			t.Errorf("search_sessions 的描述没有说明 alive=false 的含义")
+		}
+	}
+}
+
+// spec query-synonym-expansion 需求 3.4：MCP 输出带上扩展清单与近义词命中标注。
+func TestSearchExposesSynonymExpansion(t *testing.T) {
+	engine, _ := newFixture(t)
+	syn := search.ParseSynonyms("TimeMachine 增量备份")
+	engine.Syn = func() *search.Synonyms { return syn }
+	sess := connect(t, engine)
+
+	var out mcpserver.SearchOutput
+	callJSON(t, sess, "search_sessions", mcpserver.SearchArgs{Query: "TimeMachine"}, &out)
+	if len(out.Sessions) != 1 || !out.Sessions[0].ViaSynonym {
+		t.Fatalf("只含「增量备份」的会话应以近义词命中并标注：%+v", out.Sessions)
+	}
+	if len(out.Expanded) != 1 || out.Expanded[0].Term != "TimeMachine" {
+		t.Errorf("expanded = %+v", out.Expanded)
+	}
+
+	var lit mcpserver.SearchOutput
+	callJSON(t, sess, "search_sessions", mcpserver.SearchArgs{Query: "增量备份"}, &lit)
+	if len(lit.Sessions) != 1 || lit.Sessions[0].ViaSynonym {
+		t.Errorf("原词命中不该标近义词：%+v", lit.Sessions)
+	}
+}
+
+// get_session 的 kinds：只读对话、跳过工具块；total 随之变成过滤后的条数。
+func TestGetSessionKindsSkipsToolBlocks(t *testing.T) {
+	e, id := newFixture(t)
+	sess := connect(t, e)
+
+	var v mcpserver.SessionOutput
+	callJSON(t, sess, "get_session", mcpserver.GetSessionArgs{SessionID: id, Kinds: "user,assistant"}, &v)
+	for _, m := range v.Messages {
+		if m.Kind == "tool_use" || m.Kind == "tool_result" {
+			t.Fatalf("kinds=user,assistant 仍返回了工具块 seq=%d kind=%s", m.Seq, m.Kind)
+		}
+	}
+	if len(v.Messages) != 2 || v.Total != 2 {
+		t.Errorf("应剩 user+assistant 两条且 total=2，实际 %d 条 total=%d", len(v.Messages), v.Total)
+	}
+	// 带 kinds 的 from_seq：从 seq 1 起的可见消息只有 seq 2 那条 assistant
+	callJSON(t, sess, "get_session", mcpserver.GetSessionArgs{SessionID: id, Kinds: "user,assistant", FromSeq: 1}, &v)
+	if len(v.Messages) != 1 || v.Messages[0].Seq != 2 {
+		t.Errorf("from_seq=1 + kinds：%d 条 首条 seq=%d, want 1 / 2", len(v.Messages), v.Messages[0].Seq)
 	}
 }

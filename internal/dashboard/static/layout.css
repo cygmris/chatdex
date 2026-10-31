@@ -185,9 +185,101 @@ button:disabled { opacity: .5; cursor: default; }
   border-bottom: 1px solid var(--line);
   flex: none;
 }
-.filters input, .filters select { font-size: 12px; padding: 5px 8px; }
-.filters input[type="date"] { width: 132px; }
-.filters #tool { width: 130px; }
+.filters input, .filters select, .filters .combo-btn { font-size: 12px; padding: 5px 8px; }
+
+/* 「消息时间」范围选择器（range-picker.js）。
+ * [hidden] 的 display:none 靠上面那条 !important 守着——这里的 .range-pop 自带 display:grid，
+ * 没有那条的话 el.hidden = true 会被盖掉（hidden-attr-overridden-by-display 那次就是这么漏的）。 */
+.range { position: relative; }
+.range-btn { font-size: 12px; padding: 5px 8px; white-space: nowrap; }
+.range-btn.on { border-color: var(--accent); color: var(--accent); }
+.range-pop {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 20;
+  display: grid;
+  grid-template-columns: 104px 1fr;
+  gap: 10px;
+  padding: 10px;
+  width: 372px;
+  max-width: calc(100vw - 24px);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--sel-ring);
+}
+.range-presets { display: flex; flex-direction: column; gap: 4px; border-right: 1px solid var(--line); padding-right: 10px; }
+.range-presets .ghost { text-align: left; }
+.range-inputs { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+.range-inputs input { width: 104px; font-family: var(--mono); font-size: 12px; padding: 4px 6px; }
+.range-inputs input.bad { border-color: var(--danger); box-shadow: 0 0 0 2px color-mix(in srgb, var(--danger) 25%, transparent); }
+.range-nav { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+.range-ym { font-size: 12px; color: var(--fg); }
+.range-wd, .range-grid { display: grid; grid-template-columns: repeat(7, 30px); gap: 2px; }
+.range-wd span { font-size: 11px; color: var(--fg-faint); text-align: center; }
+.range-grid .d {
+  position: relative;
+  height: 28px;
+  padding: 0;
+  font-size: 12px;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--fg);
+}
+.range-grid .d.out { color: var(--fg-faint); }
+.range-grid .d.sel { background: var(--accent-bg); }
+.range-grid .d.edge { background: var(--accent); color: var(--bg); }
+.range-grid .d.anchor { outline: 1px dashed var(--accent); outline-offset: -1px; }
+.range-grid .d.today::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 3px;
+  width: 4px;
+  height: 4px;
+  border-radius: 2px;
+  background: currentColor;
+  transform: translateX(-50%);
+}
+.range-grid .d:hover { border-color: var(--accent); }
+.range-grid .d:focus { outline: none; box-shadow: 0 0 0 2px var(--accent-bg); border-color: var(--accent); }
+.range-hint { margin-top: 8px; font-size: 11px; color: var(--fg-dim); }
+
+/* 自研下拉（combo.js）。开合用 hidden 属性，靠上面 [hidden] 的 !important 守着。
+ * 浮层样式与 .range-pop 同一套；.flip 在浮层会出视口右缘时右对齐到按钮。 */
+.combo { position: relative; }
+.combo-btn { white-space: nowrap; max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
+.combo-btn.on { border-color: var(--accent); color: var(--accent); }
+.combo-pop {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 20;
+  min-width: 100%;
+  width: max-content;
+  max-width: min(360px, calc(100vw - 24px));
+  padding: 6px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--sel-ring);
+}
+.combo-pop.flip { left: auto; right: 0; }
+.combo-search { width: 100%; font-size: 12px; padding: 5px 8px; margin-bottom: 4px; }
+.combo-list { list-style: none; margin: 0; padding: 2px 0; max-height: 320px; overflow: auto; }
+.combo-list:focus { outline: none; box-shadow: 0 0 0 2px var(--accent-bg); border-radius: var(--radius); }
+.combo-list li { display: flex; gap: 12px; align-items: baseline; padding: 5px 8px; font-size: 12px; cursor: pointer; border-radius: var(--radius); }
+.combo-list li.active { background: var(--accent-bg); }
+.combo-list li[aria-selected="true"] .combo-label { color: var(--accent); }
+.combo-list li.custom .combo-label { font-style: italic; }
+.combo-list li.combo-none { color: var(--fg-dim); cursor: default; }
+.combo-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.combo-hint { margin-left: auto; color: var(--fg-dim); font-family: var(--mono); font-size: 11px; }
+.set-input .combo { width: 100%; }
+.set-input .combo-btn { width: 100%; max-width: none; text-align: left; }
+.set-row.bad .set-input .combo-btn { border-color: var(--danger); }
 
 /* ---------------- 结果条目（检索 / 摘要共用） ---------------- */
 
@@ -311,6 +403,32 @@ mark {
 .msg.reasoning .role { font-style: italic; }
 .msg.summary { border-color: var(--hit-fg); }
 .msg.target { background: var(--panel-2); }
+
+/* 回读页吸顶工具栏：返回 / 原文 / 类型开关 / 紧凑分页随视口走。
+ * 负外边距抵掉 .view 的内边距（10px 14px），铺满宽度并盖住两侧，否则正文会从旁边透出来。
+ * top 也要是 -10px：sticky 的吸附矩形是滚动容器的内容框，top: 0 会停在 padding 之下，
+ * 上方露出一条 10px 的正文（2026-10-31 真机量到 barTop = viewTop + 10）。
+ * z-index 压过 .msg 与代码块；背景用主题 token，两套主题都不透。 */
+.reader-bar {
+  position: sticky;
+  top: -10px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: -10px -14px 0;
+  padding: 6px 14px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
+}
+.reader-bar .kchips { margin-top: 0; }
+.bar-pager { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; }
+
+/* 回读页的类型开关：按下 = 显示；松开（隐藏）的那颗压暗加删除线，一眼看出哪类被藏了 */
+.kchips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.kchip[aria-pressed="false"] { opacity: .55; text-decoration: line-through; }
+.hit-hidden { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 
 .msg-head {
   display: flex;
@@ -750,6 +868,10 @@ pre, code { tab-size: 4; }
 /* 子代理标记：与来源标记同一形状，只把边框换成强调色。
  * 它出现在近半数条目上，做成实心色块会把列表搅得很花。 */
 .badge.sub { border-color: var(--accent); color: var(--accent); }
+.badge.gone { border-color: var(--danger); color: var(--danger); }
+/* 近义词命中：虚线框，表示「不是你输入的那个词」，比实线的来源/子代理标记弱一档 */
+.badge.syn { border-style: dashed; color: var(--fg-dim); }
+.hint.expanded { padding-bottom: 4px; }
 
 /* 父子入口。放在元信息块末尾，不抢会话本身的视觉。 */
 .rel-up { margin-top: 4px; font-size: 12px; }

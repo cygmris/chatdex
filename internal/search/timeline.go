@@ -12,6 +12,7 @@ type TimelineSession struct {
 	AgentLabel string `json:"agent_label,omitempty"`
 	IsSub      bool   `json:"is_sub,omitempty"`
 	FilePath   string `json:"file_path"`
+	Alive      bool   `json:"alive"` // false = 源文件已不在磁盘上；内容仍在索引里（R26）
 	StartedAt  int64  `json:"started_at"`
 	EndedAt    int64  `json:"ended_at"`
 	MsgCount   int    `json:"msg_count"`
@@ -30,7 +31,7 @@ type ProjectGroup struct {
 	//
 	// 这句话一度是假的：旧实现先按时间倒序取全局最新 200 条会话，再在这 200 条里
 	// 分组并 `Total++`，于是它的真实含义是「最新 200 条里落在这个项目的有几条」。
-	// 实测 project-a 因此在界面上显示 10 个会话，而它真的有 182 个。
+	// 实测一个有 182 个会话的项目因此在界面上显示 10 个。
 	// 现在 Total 来自分页**之前**的 COUNT(*)，名副其实。
 	Total  int   `json:"total"`
 	LastAt int64 `json:"last_at"`
@@ -51,7 +52,8 @@ type ProjectGroup struct {
 //
 // 时间范围仍按真实消息活动判定：只比较 sessions.started_at / ended_at 会把长会话
 // 中间完全没消息的日期也算进去，且点击后无法给出落在过滤范围内的回读位置。
-func (q Query) sessionFilters() (string, []any) {
+// toMatch 把 q.Text 转成 MATCH 表达式；由 Engine 传入，因为近义词表在 Engine 上、不在 Query 上。
+func (q Query) sessionFilters(toMatch func(string) string) (string, []any) {
 	scope, args := q.sessionScopeFilters()
 	var sb strings.Builder
 	sb.WriteString(scope)
@@ -63,7 +65,7 @@ func (q Query) sessionFilters() (string, []any) {
 	// 0.37 ms，差三个数量级。这与紧接着的 kind/tool 恰好相反——那两条能吃到
 	// blocks_session(session_id, seq) 的前缀，相关 EXISTS 反而快一倍多
 	// （111 ms vs 249 ms）。**不存在「哪种写法更好」的一刀切答案。**
-	if m := BuildMatch(q.Text); m != "" {
+	if m := toMatch(q.Text); m != "" {
 		sb.WriteString(` AND s.id IN (SELECT fb.session_id FROM blocks_fts f
                  JOIN blocks fb ON fb.id = f.rowid WHERE blocks_fts MATCH ?)`)
 		args = append(args, m)
@@ -137,7 +139,10 @@ const maxPerProject = 20
 //
 // 过滤条件与检索共用同一个 Query（需求 9.4）：dashboard 上换视图不用重设条件。
 func (e *Engine) Timeline(q Query) (TimelineResult, error) {
-	where, args := q.sessionFilters()
+	where, args := q.sessionFilters(func(text string) string {
+		m, _, _ := e.expand(text)
+		return m
+	})
 	targetExpr := "0"
 	var targetArgs []any
 	if q.From > 0 || q.To > 0 {
@@ -160,7 +165,7 @@ func (e *Engine) Timeline(q Query) (TimelineResult, error) {
 	rows, err := e.db.Query(`
 WITH elig AS (
   SELECT s.id, s.project_path, s.started_at, s.ended_at
-  FROM sessions s WHERE s.alive = 1`+where+`
+  FROM sessions s WHERE 1=1`+where+`
 ),
 grouped AS (
   SELECT project_path AS p, COUNT(*) AS total, MAX(ended_at) AS last_at,
@@ -177,7 +182,7 @@ ranked AS (
                             ORDER BY e.started_at DESC) AS rn
   FROM elig e JOIN picked ON picked.p = e.project_path
 )
-SELECT s.id, s.source, s.agent_label, s.parent_uid != '' AS is_sub, s.file_path,
+SELECT s.id, s.source, s.agent_label, s.parent_uid != '' AS is_sub, s.file_path, s.alive,
        r.project_path, s.started_at, s.ended_at, s.msg_count,
        COALESCE(NULLIF(s.summary, ''), '') AS summary,
        s.title,
@@ -203,7 +208,7 @@ ORDER BY r.last_at DESC, r.project_path, s.started_at DESC`,
 		var project, summary, firstUser, title string
 		var total, rowProjectTotal int
 		var lastAt int64
-		if err := rows.Scan(&t.ID, &t.Source, &t.AgentLabel, &t.IsSub, &t.FilePath, &project,
+		if err := rows.Scan(&t.ID, &t.Source, &t.AgentLabel, &t.IsSub, &t.FilePath, &t.Alive, &project,
 			&t.StartedAt, &t.EndedAt, &t.MsgCount, &summary, &title, &firstUser,
 			&t.TargetSeq, &total, &lastAt, &rowProjectTotal); err != nil {
 			return TimelineResult{}, err
@@ -244,7 +249,7 @@ ORDER BY r.last_at DESC, r.project_path, s.started_at DESC`,
 	if len(order) == 0 {
 		if err := e.db.QueryRow(`
 SELECT COUNT(*) FROM (
-  SELECT 1 FROM sessions s WHERE s.alive = 1`+where+` GROUP BY s.project_path
+  SELECT 1 FROM sessions s WHERE 1=1`+where+` GROUP BY s.project_path
 )`, args...).Scan(&projectTotal); err != nil {
 			return TimelineResult{}, err
 		}

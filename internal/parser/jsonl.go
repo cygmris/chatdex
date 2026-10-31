@@ -20,7 +20,7 @@ func scanLines(r io.Reader, offset int64, fn func(line []byte) error) (int64, er
 // 为什么需要它：Grok 的 updates.jsonl 是流式日志，一条消息拆成连续多行，
 // 解析器要能把水位停在「当前这条消息是从哪一行开始的」——否则扫描落在
 // 一轮对话中间时，那条消息会被切成两块，而且下一轮从新水位开始、接不回去，
-// **永久切开**。其余两个来源一行一条消息，用不上这个偏移量。
+// **永久切开**。其余来源一行一条消息，用不上这个偏移量。
 func scanLinesAt(r io.Reader, offset int64, fn func(line []byte, at int64) error) (int64, error) {
 	br := bufio.NewReaderSize(r, 1<<20)
 	for {

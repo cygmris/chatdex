@@ -216,7 +216,8 @@ func TestTimelineCollapsesLargeProject(t *testing.T) {
 }
 
 // 失效会话不出现在时间线上。
-func TestTimelineExcludesDeadSessions(t *testing.T) {
+// 时间线不看 alive：源文件消失的会话仍然在线上，只是 Alive=false（R26，翻转自 R1 的断言）。
+func TestTimelineKeepsDeadSessionsMarked(t *testing.T) {
 	st, e := seedTimeline(t)
 	if err := st.MarkDead("/s/b1.jsonl"); err != nil {
 		t.Fatal(err)
@@ -225,9 +226,23 @@ func TestTimelineExcludesDeadSessions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	gs := res.Groups
-	if len(gs) != 0 {
-		t.Errorf("失效会话仍在时间线上: %+v", gs)
+	if len(res.Groups) != 1 || len(res.Groups[0].Sessions) != 1 {
+		t.Fatalf("已消失的会话应仍在时间线上: %+v", res.Groups)
+	}
+	if s := res.Groups[0].Sessions[0]; s.Alive || s.FilePath != "/s/b1.jsonl" {
+		t.Errorf("应标 Alive=false，实际 %+v", s)
+	}
+	if res.ProjectTotal != 1 {
+		t.Errorf("project_total 应计入已消失会话所在项目，实际 %d", res.ProjectTotal)
+	}
+	// 翻过头的那页走另一条计数 SQL（见 Timeline 里 len(order)==0 的分支），
+	// 它有自己的一份过滤条件——只测有结果的页面会让那条漏网（变异实测不咬）。
+	res, err = e.Timeline(search.Query{Project: "/proj/beta", Offset: 50})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Groups) != 0 || res.ProjectTotal != 1 {
+		t.Errorf("翻过头的页 project_total 也应计入已消失会话，实际 groups=%d total=%d", len(res.Groups), res.ProjectTotal)
 	}
 }
 

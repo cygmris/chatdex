@@ -36,7 +36,12 @@ FROM blocks_fts WHERE blocks_fts MATCH ?`
 
 // Engine 是全项目**唯一**的检索实现：dashboard、MCP 端点与聊天 agent
 // 三端共用它，不得各自再写一套（需求 4.4 / 10.4）。
-type Engine struct{ db *sql.DB }
+type Engine struct {
+	db *sql.DB
+	// Syn 给出当前近义词表；nil = 不扩展（spec query-synonym-expansion）。
+	// 是函数而不是 *Synonyms：词表文件改了要在下一次检索生效，不能在构造时拷死。
+	Syn func() *Synonyms
+}
 
 func NewEngine(db *sql.DB) *Engine { return &Engine{db: db} }
 
@@ -64,9 +69,12 @@ type SessionHit struct {
 	SessionUID string `json:"session_uid"`
 	// AgentLabel 是随机标识（agent-<hex>，1554 个值全不重复），**不展示给用户**，
 	// 留着是因为它是从源文件读出来的原始字段。列表要的是 IsSub 这个是非判断。
-	AgentLabel  string `json:"agent_label,omitempty"`
-	IsSub       bool   `json:"is_sub,omitempty"`
-	FilePath    string `json:"file_path"` // 原始文件绝对路径（需求 3.4）
+	AgentLabel string `json:"agent_label,omitempty"`
+	IsSub      bool   `json:"is_sub,omitempty"`
+	FilePath   string `json:"file_path"` // 原始文件绝对路径（需求 3.4）
+	// Alive=false 表示 FilePath 已不在磁盘上（源文件被 CLI 清理）。正文仍在索引里，
+	// 检索/时间线/父子关系一律不按它过滤——它描述的是文件，不是内容（R26）。
+	Alive       bool   `json:"alive"`
 	ProjectPath string `json:"project_path"`
 	StartedAt   int64  `json:"started_at"`
 	EndedAt     int64  `json:"ended_at"`
@@ -87,6 +95,10 @@ type SessionHit struct {
 	LastSeq  int    `json:"last_seq"`
 	BestKind string `json:"best_kind"`
 	BestTool string `json:"best_tool,omitempty"`
+	// ViaSynonym：最佳命中块只用原词匹配不上，至少有一个词是靠近义词补上的。
+	// 多词查询时块里可能有部分原词（搜「hash 编译」，块里有 hash、没有编译、有构建）。
+	// 判的是最佳块而不是整个会话——片段与跳转落点都是最佳块，标注描述的是用户看到的那一块。
+	ViaSynonym bool `json:"via_synonym,omitempty"`
 }
 
 // BlockHit 是块粒度的命中。
@@ -102,29 +114,92 @@ type BlockHit struct {
 	Snippet   string  `json:"snippet"`
 }
 
-// Result 是检索结果。NoMatch 明确区分「无命中」与「有命中但被过滤空了」，
-// 避免用近似结果冒充命中（需求 1.6）。
+// Result 是检索结果。NoMatch 明确区分「无命中」与「有命中但被过滤空了」。
+// 近义词命中是近似结果，允许出现，但必须经 Expanded / ViaSynonym 标明来源，
+// 不得冒充原词命中（需求 1.6，经 spec query-synonym-expansion 修订）。
 type Result struct {
 	Sessions []SessionHit `json:"sessions"`
 	NoMatch  bool         `json:"no_match"`
 	Query    Query        `json:"query"`
+	// Expanded 列出本次被扩展的词及其近义词；没有扩展时省略。
+	// NoMatch 的含义随之是「原词与近义词都没命中」。
+	Expanded []Expansion `json:"expanded,omitempty"`
 }
 
-// BuildMatch 把用户输入转成 FTS5 MATCH 表达式。
+// Expansion 是一个查询词与它被扩展出的近义词。
+type Expansion struct {
+	Term string   `json:"term"`
+	Also []string `json:"also"`
+}
+
+// BuildMatch 把用户输入转成 FTS5 MATCH 表达式（不做近义词扩展）。
+func BuildMatch(text string) string {
+	m, _, _ := ExpandMatch(text, nil)
+	return m
+}
+
+// ExpandMatch 把用户输入转成 FTS5 MATCH 表达式，按 syn 扩展近义词。
+// 返回扩展后的 match、只含原词的 literal、以及扩展清单。
 //
 // 每个空白分隔的词各成一个短语（引号包裹使 * - : ( 等特殊字符按字面处理），
 // 词与词之间是 AND。CJK 经 NormalizeQuery 切成单字后，短语查询保证它们按序相邻，
 // 于是「备份」能命中「增量备份」内部而不会命中散落各处的三个字。
-func BuildMatch(text string) string {
-	var phrases []string
+// 有近义词的词变成 ("原词" OR "近义词" …) 一组。
+//
+// 🔴 词间必须是显式 AND。FTS5 里括号组后接隐式 AND 是语法错误
+// （`("a" OR "b") "c"` → syntax error），去掉括号的 `"a" OR "b" "c"` 能跑，
+// 但语义是 a OR (b AND c)——静默错，比报错更糟。
+func ExpandMatch(text string, syn *Synonyms) (match, literal string, exp []Expansion) {
+	var groups, lits []string
 	for _, term := range strings.Fields(text) {
-		norm := strings.TrimSpace(NormalizeQuery(term))
-		if norm == "" {
+		p := phrase(term)
+		if p == "" {
 			continue
 		}
-		phrases = append(phrases, `"`+strings.ReplaceAll(norm, `"`, `""`)+`"`)
+		lits = append(lits, p)
+		alts := []string{p}
+		var also []string
+		for _, w := range syn.Lookup(term) {
+			if q := phrase(w); q != "" && !contains(alts, q) {
+				alts = append(alts, q)
+				also = append(also, w)
+			}
+		}
+		if len(also) == 0 {
+			groups = append(groups, p)
+			continue
+		}
+		groups = append(groups, "("+strings.Join(alts, " OR ")+")")
+		exp = append(exp, Expansion{Term: term, Also: also})
 	}
-	return strings.Join(phrases, " ")
+	return strings.Join(groups, " AND "), strings.Join(lits, " AND "), exp
+}
+
+// phrase 把一个词转成 FTS5 短语字面量；词经分词后为空返回空串。
+func phrase(term string) string {
+	norm := strings.TrimSpace(NormalizeQuery(term))
+	if norm == "" {
+		return ""
+	}
+	return `"` + strings.ReplaceAll(norm, `"`, `""`) + `"`
+}
+
+func contains(list []string, s string) bool {
+	for _, x := range list {
+		if x == s {
+			return true
+		}
+	}
+	return false
+}
+
+// expand 用当前词表扩展查询。
+func (e *Engine) expand(text string) (match, literal string, exp []Expansion) {
+	var syn *Synonyms
+	if e.Syn != nil {
+		syn = e.Syn()
+	}
+	return ExpandMatch(text, syn)
 }
 
 // filters 生成公共的 WHERE 片段。
@@ -216,7 +291,7 @@ func (q Query) limit() (int, int) {
 // 这条直接对应踩出来的事故：找 restic 那次，命中最多的两个会话
 // （2272 / 2154 次）都不是目标，目标只有 669 次。求和排序会原样重建那个 bug。
 func (e *Engine) SearchSessions(q Query) (Result, error) {
-	match := BuildMatch(q.Text)
+	match, literal, exp := e.expand(q.Text)
 	if match == "" {
 		return e.recentSessions(q)
 	}
@@ -226,7 +301,7 @@ func (e *Engine) SearchSessions(q Query) (Result, error) {
 
 	rows, err := e.db.Query(`
 WITH f AS MATERIALIZED (`+ftsScoreCTE+`)
-SELECT s.id, s.source, s.session_uid, s.agent_label, s.parent_uid != '' AS is_sub, s.file_path, s.project_path,
+SELECT s.id, s.source, s.session_uid, s.agent_label, s.parent_uid != '' AS is_sub, s.file_path, s.alive, s.project_path,
        s.started_at, s.ended_at, s.msg_count, COALESCE(s.summary, ''),
        s.summary_model, s.summary_at, s.title,
        MIN(f.score) AS score, f.bid AS best_bid, COUNT(*) AS hits,
@@ -240,7 +315,7 @@ SELECT s.id, s.source, s.session_uid, s.agent_label, s.parent_uid != '' AS is_su
 FROM f
 JOIN blocks   b ON b.id = f.bid
 JOIN sessions s ON s.id = b.session_id
-WHERE s.alive = 1`+where+`
+WHERE 1=1`+where+`
 GROUP BY s.id
 ORDER BY score ASC
 LIMIT ? OFFSET ?`, append(append([]any{match}, args...), limit, offset)...)
@@ -249,14 +324,14 @@ LIMIT ? OFFSET ?`, append(append([]any{match}, args...), limit, offset)...)
 	}
 	defer rows.Close()
 
-	res := Result{Query: q}
+	res := Result{Query: q, Expanded: exp}
 	var bestIDs []int64
 	for rows.Next() {
 		var h SessionHit
 		var bid int64
 		// MIN() 的裸列取自产生该最小值的那一行——SQLite 对 min()/max() 有此保证，
 		// 于是 best_bid 就是该会话最相关的那个块。
-		if err := rows.Scan(&h.ID, &h.Source, &h.SessionUID, &h.AgentLabel, &h.IsSub, &h.FilePath,
+		if err := rows.Scan(&h.ID, &h.Source, &h.SessionUID, &h.AgentLabel, &h.IsSub, &h.FilePath, &h.Alive,
 			&h.ProjectPath, &h.StartedAt, &h.EndedAt, &h.MsgCount, &h.Summary,
 			&h.SummaryModel, &h.SummaryAt, &h.Title,
 			&h.Score, &bid, &h.Hits, &h.LastSeq); err != nil {
@@ -272,6 +347,13 @@ LIMIT ? OFFSET ?`, append(append([]any{match}, args...), limit, offset)...)
 	for i := range res.Sessions {
 		if err := e.fillBest(&res.Sessions[i], bestIDs[i], match); err != nil {
 			return Result{}, err
+		}
+		if len(exp) > 0 {
+			lit, err := e.blockMatches(bestIDs[i], literal)
+			if err != nil {
+				return Result{}, err
+			}
+			res.Sessions[i].ViaSynonym = !lit
 		}
 	}
 	res.NoMatch = len(res.Sessions) == 0
@@ -295,8 +377,16 @@ FROM blocks b WHERE b.id = ?`, match, bid).
 	if err != nil {
 		return err
 	}
-	h.Snippet = Strip(snip) // 去掉 CJK 分隔标记后才可直接展示
+	h.Snippet = frontLoad(Strip(snip)) // 去掉 CJK 分隔标记后才可直接展示；命中要在前三行
 	return nil
+}
+
+// blockMatches 判断单个块是否命中 match。按 rowid 点查，代价与全库命中数无关。
+func (e *Engine) blockMatches(bid int64, match string) (bool, error) {
+	var n int
+	err := e.db.QueryRow(`SELECT count(*) FROM blocks_fts WHERE blocks_fts MATCH ? AND rowid = ?`,
+		match, bid).Scan(&n)
+	return n > 0, err
 }
 
 // recentSessions 处理「只有过滤条件、没有关键词」的情形（时间线与初始视图会用到）。
@@ -306,12 +396,12 @@ func (e *Engine) recentSessions(q Query) (Result, error) {
 	limit, offset := q.limit()
 
 	rows, err := e.db.Query(`
-SELECT s.id, s.source, s.session_uid, s.agent_label, s.parent_uid != '' AS is_sub, s.file_path, s.project_path,
+SELECT s.id, s.source, s.session_uid, s.agent_label, s.parent_uid != '' AS is_sub, s.file_path, s.alive, s.project_path,
        s.started_at, s.ended_at, s.msg_count, COALESCE(s.summary, ''),
        s.summary_model, s.summary_at, s.title
 FROM sessions s
 JOIN blocks b ON b.session_id = s.id
-WHERE s.alive = 1`+where+`
+WHERE 1=1`+where+`
 GROUP BY s.id
 ORDER BY s.started_at DESC
 LIMIT ? OFFSET ?`, append(args, limit, offset)...)
@@ -323,7 +413,7 @@ LIMIT ? OFFSET ?`, append(args, limit, offset)...)
 	res := Result{Query: q}
 	for rows.Next() {
 		var h SessionHit
-		if err := rows.Scan(&h.ID, &h.Source, &h.SessionUID, &h.AgentLabel, &h.IsSub, &h.FilePath,
+		if err := rows.Scan(&h.ID, &h.Source, &h.SessionUID, &h.AgentLabel, &h.IsSub, &h.FilePath, &h.Alive,
 			&h.ProjectPath, &h.StartedAt, &h.EndedAt, &h.MsgCount, &h.Summary,
 			&h.SummaryModel, &h.SummaryAt, &h.Title); err != nil {
 			return Result{}, err
@@ -335,7 +425,7 @@ LIMIT ? OFFSET ?`, append(args, limit, offset)...)
 
 // SearchBlocks 返回块粒度的命中，按相关度排序。
 func (e *Engine) SearchBlocks(q Query) ([]BlockHit, error) {
-	match := BuildMatch(q.Text)
+	match, _, _ := e.expand(q.Text)
 	if match == "" {
 		return nil, nil
 	}
@@ -349,7 +439,7 @@ SELECT b.id, b.session_id, b.seq, b.ts, b.kind, b.tool_name, b.tool_use_id, b.tr
 FROM f
 JOIN blocks   b ON b.id = f.bid
 JOIN sessions s ON s.id = b.session_id
-WHERE s.alive = 1`+where+`
+WHERE 1=1`+where+`
 ORDER BY f.score ASC
 LIMIT ? OFFSET ?`, append(append([]any{match}, args...), limit, offset)...)
 	if err != nil {
@@ -391,7 +481,7 @@ FROM blocks_fts WHERE blocks_fts MATCH ? AND rowid = ?`, match, bid).Scan(&snip)
 	if err == sql.ErrNoRows {
 		return "", nil
 	}
-	return Strip(snip), err
+	return frontLoad(Strip(snip)), err
 }
 
 // Message 是回读视图里的一条消息。
@@ -415,13 +505,58 @@ type SessionView struct {
 	// 回读页据此决定显示「← 属于主会话」还是「子代理 (N)」。
 	Parent     *SessionHit `json:"parent,omitempty"`
 	ChildCount int         `json:"child_count"`
-	Total      int         `json:"total"`
-	FromSeq    int         `json:"from_seq"`
-	Messages   []Message   `json:"messages"`
+	// Total 是**可见集**（按 Kinds 过滤后）的条数；TotalAll 是全部对话消息数。
+	// 两者分开给：页脚要写「显示 X / 全部 Y」，少一个就写不出来。
+	Total      int            `json:"total"`
+	TotalAll   int            `json:"total_all"`
+	KindCounts map[string]int `json:"kind_counts"`
+	// FromSeq 是本页在可见集里的偏移（不带 Kinds 时等于首条 seq）。
+	FromSeq int `json:"from_seq"`
+	// TargetKind 是 AtSeq 那条消息的类型；回读页据此判断「命中的那条是不是被隐藏了」。
+	TargetKind string    `json:"target_kind,omitempty"`
+	Messages   []Message `json:"messages"`
+}
+
+// SessionQuery 是回读一页消息的条件。
+//
+// 分页基准是**可见集里的偏移**，不是 seq：带 Kinds 过滤后两者不同。
+// 不带 Kinds 时二者相等——对话消息的 seq 从 0 连续（2026-10-31 实测全库 0 个会话例外；
+// 摘要块是 seq=-1，本来就不进列表），所以不带 Kinds 的调用方行为逐字节不变。
+type SessionQuery struct {
+	Offset int      // 可见集里的偏移
+	Limit  int      // ≤0 或 >500 → 200
+	Kinds  []string // 只要这些类型；空 = 全部；不认识的类型名忽略（见 ParseKinds）
+	// AtSeq 非 nil 时忽略 Offset：按该 seq 在可见集里的位置取偏移。
+	// Align 为真则再对齐到页首——回读页要的是「包含它的那一页」；
+	// 为假则从它开始读——MCP 的 from_seq 是这个意思。
+	AtSeq *int
+	Align bool
+}
+
+// messageKinds 是 Message.Kind 的全部取值；ParseKinds 只认这些。
+var messageKinds = map[string]bool{
+	"user": true, "assistant": true, "reasoning": true,
+	"tool_use": true, "tool_result": true, "summary": true,
+}
+
+// ParseKinds 把 "user,assistant" 这种逗号串变成去重、只含合法类型的列表；全不合法 → 空（= 全部）。
+func ParseKinds(s string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, k := range strings.Split(s, ",") {
+		k = strings.TrimSpace(k)
+		if k == "" || !messageKinds[k] || seen[k] {
+			continue
+		}
+		seen[k] = true
+		out = append(out, k)
+	}
+	return out
 }
 
 // GetSession 按时间正序返回会话消息，支持分页以免一次性渲染上万条（需求 3.3 / 4.2）。
-func (e *Engine) GetSession(id int64, fromSeq, limit int) (SessionView, error) {
+func (e *Engine) GetSession(id int64, q SessionQuery) (SessionView, error) {
+	limit := q.Limit
 	if limit <= 0 || limit > 500 {
 		limit = 200
 	}
@@ -430,19 +565,70 @@ func (e *Engine) GetSession(id int64, fromSeq, limit int) (SessionView, error) {
 	err := e.db.QueryRow(`
 SELECT s.id, s.source, s.session_uid, s.agent_label, s.parent_uid != '' AS is_sub, s.file_path, s.project_path,
        s.started_at, s.ended_at, s.msg_count, COALESCE(s.summary,''),
-       s.summary_model, s.summary_at, s.title, s.alive,
-       -- seq>=0 才是对话消息：摘要块存在 seq=-1，它进 FTS 但不进回读列表，
-       -- 若计入总数，分页器会多出一页永远空的「下一页」
-       (SELECT COUNT(*) FROM blocks WHERE session_id = s.id AND seq >= 0)
+       s.summary_model, s.summary_at, s.title, s.alive
 FROM sessions s WHERE s.id = ?`, id).
 		Scan(&v.ID, &v.Source, &v.SessionUID, &v.AgentLabel, &v.IsSub, &v.FilePath, &v.ProjectPath,
 			&v.StartedAt, &v.EndedAt, &v.MsgCount, &v.Summary,
-			&v.SummaryModel, &v.SummaryAt, &v.Title, &alive, &v.Total)
+			&v.SummaryModel, &v.SummaryAt, &v.Title, &alive)
 	if err != nil {
 		return v, err
 	}
 	v.Alive = alive == 1
-	v.FromSeq = fromSeq
+
+	// 各类型计数一次查全：TotalAll、Total（按 Kinds 求和）、页头的 chips 都从这里出。
+	// seq>=0 才是对话消息：摘要块存在 seq=-1，它进 FTS 但不进回读列表，
+	// 若计入总数，分页器会多出一页永远空的「下一页」。
+	v.KindCounts = map[string]int{}
+	kc, err := e.db.Query(`SELECT kind, COUNT(*) FROM blocks WHERE session_id = ? AND seq >= 0 GROUP BY kind`, id)
+	if err != nil {
+		return v, err
+	}
+	for kc.Next() {
+		var k string
+		var n int
+		if err := kc.Scan(&k, &n); err != nil {
+			kc.Close()
+			return v, err
+		}
+		v.KindCounts[k] = n
+		v.TotalAll += n
+	}
+	kc.Close()
+	// 可见集的 WHERE 片段：所有按可见集算的东西（总数、位置、取页）必须用同一份，
+	// 否则「第 N 页」与「共 M 页」会各自按不同的集合算。
+	where := "session_id = ? AND seq >= 0"
+	args := []any{id}
+	if len(q.Kinds) > 0 {
+		where += " AND kind IN (" + strings.TrimRight(strings.Repeat("?,", len(q.Kinds)), ",") + ")"
+		for _, k := range q.Kinds {
+			args = append(args, k)
+			v.Total += v.KindCounts[k]
+		}
+	} else {
+		v.Total = v.TotalAll
+	}
+
+	offset := q.Offset
+	if q.AtSeq != nil {
+		// 该 seq 在可见集里的位置 = 它前面有多少条可见消息
+		var rank int
+		if err := e.db.QueryRow(`SELECT COUNT(*) FROM blocks WHERE `+where+` AND seq < ?`,
+			append(append([]any{}, args...), *q.AtSeq)...).Scan(&rank); err != nil {
+			return v, err
+		}
+		offset = rank
+		if q.Align {
+			offset = rank / limit * limit
+		}
+		if err := e.db.QueryRow(`SELECT kind FROM blocks WHERE session_id = ? AND seq = ?`, id, *q.AtSeq).
+			Scan(&v.TargetKind); err != nil && err != sql.ErrNoRows {
+			return v, err
+		}
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	v.FromSeq = offset
 
 	// 父子关系：两次很轻的查询（都走 sessions_parent 索引），换回读页不必再猜。
 	// 单独取子代理**数量**而不是列表——绝大多数会话是 0，取列表纯属浪费。
@@ -457,16 +643,18 @@ FROM sessions s WHERE s.id = ?`, id).
 	}
 	if err := e.db.QueryRow(`
 SELECT COUNT(*) FROM sessions c JOIN sessions p ON p.session_uid = c.parent_uid
-WHERE p.id = ? AND c.alive = 1`, id).Scan(&v.ChildCount); err != nil {
+WHERE p.id = ?`, id).Scan(&v.ChildCount); err != nil {
 		// 数错了不是小事：回读页据此决定显不显示入口，count 归零会让一个挂着
 		// 350 个子代理的会话看起来一个都没有
 		return v, err
 	}
 
+	// 偏移分页走 blocks_session(session_id, seq) 索引；不带 Kinds 时 OFFSET == seq，
+	// 与原来的 seq >= ? 结果相同（seq 连续），带 Kinds 时才是真正的「可见集第 N 条起」。
 	rows, err := e.db.Query(`
 SELECT seq, ts, kind, tool_name, tool_use_id, truncated, raw_bytes, body
-FROM blocks WHERE session_id = ? AND seq >= ?
-ORDER BY seq ASC LIMIT ?`, id, fromSeq, limit)
+FROM blocks WHERE `+where+`
+ORDER BY seq ASC LIMIT ? OFFSET ?`, append(append([]any{}, args...), limit, offset)...)
 	if err != nil {
 		return v, err
 	}
@@ -492,10 +680,37 @@ type ProjectStat struct {
 	LastAt      int64  `json:"last_at"`
 }
 
+// ToolStat 是一个工具名在全库的块数，给过滤栏的工具下拉当选项与计数。
+type ToolStat struct {
+	ToolName string `json:"tool_name"`
+	Blocks   int    `json:"blocks"`
+}
+
+// Tools 列出全部工具名，按块数降序、同数按名。
+// 实测 2.36M 块聚合 0.68 s（blocks 没有 tool_name 索引），调用方必须缓存（httpapi 做了 10 分钟）。
+func (e *Engine) Tools() ([]ToolStat, error) {
+	rows, err := e.db.Query(`
+SELECT tool_name, COUNT(*) FROM blocks WHERE tool_name <> ''
+GROUP BY tool_name ORDER BY 2 DESC, 1`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ToolStat
+	for rows.Next() {
+		var t ToolStat
+		if err := rows.Scan(&t.ToolName, &t.Blocks); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
 func (e *Engine) Projects() ([]ProjectStat, error) {
 	rows, err := e.db.Query(`
 SELECT project_path, COUNT(*), MAX(ended_at)
-FROM sessions WHERE alive = 1 AND project_path <> ''
+FROM sessions WHERE project_path <> ''
 GROUP BY project_path ORDER BY MAX(ended_at) DESC`)
 	if err != nil {
 		return nil, err

@@ -39,8 +39,9 @@ func (f fakeBackup) Coverage(context.Context, []backup.IndexedSession,
 	func([]string) (map[string]bool, error), backup.SeenProgress) (backup.Coverage, error) {
 	return backup.Coverage{}, nil
 }
-func (f fakeBackup) Init(context.Context) error   { return nil }
-func (f fakeBackup) LastAuto() *backup.AutoResult { return f.lastAuto }
+func (f fakeBackup) Init(context.Context) error    { return nil }
+func (f fakeBackup) LastAuto() *backup.AutoResult  { return f.lastAuto }
+func (f fakeBackup) LastIndex() *backup.AutoResult { return nil }
 func (f fakeBackup) Fetch(context.Context, string) (io.ReadCloser, error) {
 	if f.err != nil {
 		return nil, f.err
@@ -282,5 +283,23 @@ func TestArchivedWorksWithoutBackupWhenFileOnDisk(t *testing.T) {
 	}
 	if got.Origin != "disk" {
 		t.Errorf("origin = %q, want disk", got.Origin)
+	}
+}
+
+// 「看原件」那条路也认 kinds，否则切过去工具块又全冒出来；from 同样是可见集偏移。
+func TestArchivedHonorsKindsFilter(t *testing.T) {
+	srv := newArchivedServer(t, fakeBackup{content: archivedFull})
+
+	var got search.SessionView
+	if code := getJSON(t, srv.URL+"/api/session/1/archived?kinds=user", &got); code != 200 {
+		t.Fatalf("状态码 = %d", code)
+	}
+	if len(got.Messages) != 1 || got.Messages[0].Kind != "user" || got.Total != 1 {
+		t.Errorf("kinds=user 应只剩 1 条 user 且 Total=1，实际 Total=%d msgs=%+v", got.Total, got.Messages)
+	}
+	// 不带 kinds 时两条都在，from=1 是第二条（tool_result）
+	getJSON(t, srv.URL+"/api/session/1/archived?from=1", &got)
+	if len(got.Messages) != 1 || got.Messages[0].Kind != "tool_result" || got.Total != 2 {
+		t.Errorf("from=1：Total=%d msgs=%+v, want Total=2 且只剩那条 tool_result", got.Total, got.Messages)
 	}
 }

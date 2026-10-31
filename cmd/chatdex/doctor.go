@@ -42,6 +42,7 @@ func runDoctor(args []string) error {
 		parser.Claude{Home: cfg.Home},
 		parser.Codex{Home: cfg.Home},
 		parser.Grok{Home: cfg.Home},
+		parser.CursorCLI{Home: cfg.Home},
 	)
 	roots := cfg.Scan.Roots
 	if len(roots) == 0 {

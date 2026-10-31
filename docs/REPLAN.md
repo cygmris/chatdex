@@ -136,7 +136,7 @@ knownPaths」等于口头承诺；维护一份 `knownExcluded`（含理由）并
 
 **backlog 里记的规模低估了一个量级。** 原条目写「超过 200 的会话不可达」，
 听起来像尾部截断。开工前先量了一遍：**118 个项目只看得到 6 个（95% 不可见）**，
-`project-a` 项目头写着 10 个会话而它真的有 182 个。
+一个项目头写着 10 个会话而它真的有 182 个。
 ⇒ 可迁移的判据：**backlog 条目是当时顺手记的印象，动工前必须重新量。**
 「记录里说 X」与「现在确实是 X」是两件事——这与「别拿注释当事实」同一族。
 
@@ -463,3 +463,217 @@ rewind_points.jsonl 是编辑器状态与回滚点，不是对话内容」。那
 - [ ] 247 个 Grok 会话的摘要被迁移作废，但 `summary.enabled = false`（使用者自己
       关的），重新启用后 `EnqueueMissing` 会自动补上 226 个。**没有动配置**
 - [ ] macOS launchd 部署下未验（本轮只在 Linux systemd 真机验收）
+
+## R26 search-hides-vanished-sessions — 检索一直在排除半个索引
+
+### 发现
+
+**缺陷不是一行 bug，是一个字段被读成了另一个意思。** `sessions.alive` 定义为
+「源文件已消失」，九处 `WHERE alive = 1`（检索三条路径、时间线两处、父子关系三处、
+摘要入队一处）把它当成了「内容可用」的开关。内容从来没离开过 `blocks`，回读页
+按 id 打得开、备份还能取原件，**但没有任何检索入口到得了它们**。
+
+规模：2026-09-16 实测 `alive=0` **2696 / 4711（57%）**，且在涨（评估那 40 分钟里
+2581→2690；`~/.claude/settings.json` 未设 `cleanupPeriodDays`，Claude Code 按默认
+30 天清 transcript）。R1 做出这个设计时是 183 个（3.9%），E2E 把错的读法钉成了
+正确行为并一直绿着。
+
+发现的路径值得记：它不是被人报的，是 R25 之后做 agentmemory 对照评估时，
+线上交叉校验的数字对不上复刻——追下去才发现 68/100 个目标会话 `alive=0`，
+线上根本搜不到。**评估脚本的「对不上」是这条 bug 唯一露过的头。**
+
+### 做了什么
+
+九处过滤删掉，`SessionHit` / `TimelineSession` / MCP `SessionBrief` / `SessionOutput`
+各加 `alive` 列，dashboard 三个列表加「源已消失」标签（沿用备份页文案），
+`search_sessions` 描述说明 `alive=false` 时正文用 `get_session` 读。
+结构测试 `TestAliveIsNotAContentFilter` 守住不变式：读索引的包里不得再出现 `alive = 1`。
+变异 15/15 咬（含两条起初不咬的：翻过头那页的 project_total 有自己一份 SQL；
+MCP 只断言 false 被零值骗过）。
+
+**没做的**：不加「仅源文件仍在」过滤项。回读页已能区分两种来源，过滤是纯增功能，
+等真实使用里有人要再说（requirements 澄清标记已带暂定结论）。
+
+### 实测（2026-09-16，重启后）
+
+| 项 | 值 |
+|---|---|
+| `crypto.ciphertext`（全库仅会话 4401 与本评估会话含它） | 改前 4401 不出现；改后出现，`alive=false` |
+| `/api/timeline` 全量（elig 2015 → 4711） | **14–20 ms**（三次），project_total 197 |
+| `/api/projects` | 197 个项目，会话合计 4711（改前只数 alive=1） |
+| 摘要队列 | pending 0——`summary.enabled=false`（用户设置，未动）；开了会把约 2500 个消失会话按优先级 1 补进队列 |
+
+### 下一步
+
+- [ ] `multiword-and-within-block`（P2）：块级 AND 是本次评估暴露的第二条边界，与本条无关但同样让「明明有」变成「搜不到」
+- [ ] `hybrid-dense-retrieval`（P2）：前置是修 NVIDIA 驱动（NVML 版本不匹配，Ollama 落在 CPU）
+- [ ] 摘要覆盖率：`alive=1` 里 1176 个无摘要、Grok 243 个一条都没有——现在消失的会话也能入队了，开 `summary.enabled` 后跑一轮
+
+## R27 index-db-in-backup — 索引库从没进过备份，且设计里第一版选错了复制方式
+
+### 发现
+
+1. **用户以为「脚本已自动备到 R2」，实测仓库里 `index.db` 出现 0 次。** R2 是仓库目录的镜像，
+   仓库里没有的东西镜像里也没有；`backup.sources` 只列会话目录，`exclude_larger_than: 1M`
+   又会把 4 GB 的库挡掉。而库里 3304 个源文件已消失的会话正文（334 个连原文备份都没有）
+   与全部 3391 条摘要只存在于它里面。
+2. **`VACUUM INTO` 做快照源是错的**：它重新排版整个库，页面搬家后 restic 的内容分块对不上。
+   同一段真实写入（62 个新块、3 分钟）下 restic 再写 1881 MB；换 SQLite 在线备份 API（页对页复制）
+   只写 35 MB。真机第 4 轮 21.3 MB。**这一条是第二轮真机数字（2.02 GB）对不上「几百 MB」的估计
+   才追出来的**——估计写进 backlog 时没有任何实测支撑。
+
+### 做了什么
+
+`Store.SnapshotTo`（在线备份）→ `<db 目录>/snapshot/index.db` → 单独一次
+`restic backup --tag chatdex-index`（不带大小过滤），每天最多一次，失败不影响主备份、1 小时后重试；
+`backup.index_snapshot` 默认开；状态与页面各一行；恢复步骤实跑过写进 deploy.md。变异 8/8 咬。
+
+### 下一步
+
+- [ ] `backup-retention`：仓库从未 forget/prune，1603+ 快照；索引快照按 21 MB/天，先不急
+- [ ] 一周后回看 `last_index.bytes_added` 的真实日增量（本轮只有 2 分钟间隔的样本）
+
+## R28 query-synonym-expansion — 换了叫法能搜到了，常见词仍排不上
+
+### 发现
+
+1. **一个真实「没搜到」案例里其实是两种失败。** 搜 `hash` 找不到，是因为那次讨论只说「提交 / SHA / commit」——
+   换了叫法，近义词表能治。搜 `版本` 找不到，是目标会话排第 4、但 311 处命中里落点不对——排序问题，
+   扩展只会让它更糟。两者要分开立项，否则会以为一个功能修好了两件事。
+2. **FTS5 里括号组后接隐式 AND 是语法错误**，而去掉括号能跑但语义是 `a OR (b AND c)`。
+   词间必须显式 `AND`。
+3. **单词 `hash` 扩展后仍排不进前 5**（相关子代理第 27 名）：近义词组会命中大量模板化短块，bm25 偏向短块。
+   加一个限定词即进前 3。
+4. 问一问（聊天助手）在同一案例上只搜一次就自信地答错。系统提示里「拿不准就读」它没照做。
+5. backlog 里「Ollama 落在 CPU、全库嵌入 20 小时」的前提已不成立（RTX 5060 Ti，实测 100% GPU）。
+
+### 做了什么
+
+查询侧扩展，不重建索引：内置通用词表 + 用户 `synonyms.txt`（热生效）；`expanded` / `via_synonym`
+在 API、MCP、检索页三处可见；session-search 需求 1.6 原地标注修订；开始记录真实案例清单。
+
+### 下一步
+
+- [ ] `common-term-drowned`：会话内多落点或按 kind 加权，让常见词也能点到对的地方
+- [ ] `chat-single-search-overconfident`：问一问答前强制核对一次原文
+- [ ] 真实案例清单（`docs/search-miss-cases.md`）继续攒，到 10 个时判 R8 门控
+
+
+## R30 custom-date-range-picker — 把「筛的是消息时间」写到控件上，日期按本地日历算
+
+### 发现
+
+1. 用户「选了日期范围搜不到」拆开是两件事：片段高亮被卡片裁掉（R29 已修）+ 控件没写筛的是哪种时间。
+   语义本身没错（消息时间），用户也确认要的就是消息时间——缺的只是把它说出来。
+2. 侧栏「今天 / 最近 7 天」用 `toISOString()` 取日期是 UTC：本机 UTC+7 凌晨点「今天」得到的是昨天。
+   两个入口各算一份日期，才让这个错活到现在。
+3. 原生 `<input type="date">` 的 `mm/dd/yyyy` 由浏览器语言决定，`lang` 改不了——这一条把自研变成必要。
+4. 验收时撞到既有竞态：快速切视图会留下上一个视图的 DOM（backlog `view-switch-stale-render`）。
+
+### 做了什么
+
+`range-picker.js`：纯函数 `CD.rangeMath`（node --test，9 组用例，UTC 陷阱有阳性对照）+ 组件 `CD.range`
+（预设 / 手输 / 周一起始月历 / 两点选 / 方向键翻月 / Esc / 外点 / aria）。URL 与 API 契约不变。
+boot.js 三处接线；侧栏预设改调同一实现。变异 6/6 咬。真机走完全部交互与明暗两套主题。
+
+### 下一步
+
+- [ ] `view-switch-stale-render`（P2）：视图 refresh 带序号，过期响应不渲染
+- [ ] 侧栏那两颗预设按钮要不要撤（现在与面板里的重复）：用一阵再定
+
+## R31 reader-kind-filter — 回读页按类型显隐，分页跟着可见集走
+
+### 发现
+
+1. 用户从命中点进回读页想只看对话。实测 id 35：11 222 块里工具块 80%，对话 2 233 条，全显示要翻 113 页。
+2. 前端 `display:none` 做不了这件事：页数不变，隐藏等于装饰。过滤要在取页之前，于是 `from` 的语义
+   要从 seq 下界换成可见集偏移；不带 `kinds` 时二者相等（全库 seq 连续，0 例外），老调用方不变。
+3. 命中那条可能正是被隐藏的类型（seq 5000 是 tool_result）：要明说并给一键显示，不能静默落页。
+
+### 做了什么
+
+`Engine.GetSession(id, SessionQuery{Offset, Limit, Kinds, AtSeq, Align})`：一次 `GROUP BY kind` 出各类计数，
+计数 / 定位 / 取页共用同一份 WHERE。HTTP `kinds=` + `seq=`、archived 同样过滤、MCP `get_session` 加 `kinds`。
+回读页：页头 chips（`aria-pressed`，隐藏的压暗加删除线）、偏好进 `localStorage['chatdex.hideKinds']`、
+页脚「显示 X / 全部 Y 条」、命中被隐藏的提示 + 一键显示、全隐藏不发请求。变异 8/8 咬。
+真机 id 35：隐藏工具后 113 页 → 23 页、页脚 2233 / 11222；翻页 URL 的 seq 跟页首走；刷新沿用；
+原件模式过滤仍生效；MCP `kinds=user` 只回 user、total 323。
+
+### 下一步
+
+- [x] README 的回读页截图还是没有 chips 的旧图：R34 重拍全套
+- [ ] `view-switch-stale-render`（P2）仍在
+
+## R32 reader-sticky-toolbar — 回读页控件吸顶
+
+### 发现
+
+1. R31 的开关放在页头是图省事，没算一页 100 条的滚动成本；用户当天指出。
+2. 悬浮按钮 / 搬左栏 / 吸顶三选一：开关是筛选，状态要始终可见，吸顶胜出（决策 48）。
+3. 顺带把「← 返回」「原文/渲染」也带上，加一组紧凑分页「‹ 第 N / M 页 ›」。
+
+### 做了什么
+
+`reader.js` 模板新增 `.reader-bar`（返回 / 原文 / chips / 紧凑分页），元信息块去掉 chips；紧凑分页走同一个 `goPage`。
+`layout.css` 十行：sticky、负外边距铺满、token 背景。零状态 / 零 API 改动。
+e2e 结构守卫一条，变异 4/4 咬。真机：滚动后工具栏贴在 `#view` 顶、滚动后切开关 / 翻页、两套主题不透出。
+
+### 下一步
+
+- [ ] 键盘快捷键（如 `t` 切工具块）：等真实使用再判，没人会发现的控件不算控件
+- [x] README 回读页截图仍是旧图（同 R31；R34 重拍全套）
+
+## R33 custom-combobox — 下拉全部自研，项目与工具名能输入即搜
+
+### 发现
+
+1. 五处原生 `<select>`；项目 300 个、工具名 477 个。问一问页只列前 20 个项目，过滤栏没有项目选择器（左栏只前 8 个），
+   工具名靠手敲。用户一句点破。
+2. 深链接 `?project=…` 先于 `/api/projects` 返回：按钮若按列表找文案会显示成「全部」——这是最容易静默回归的一处，
+   纯函数 `labelOf` 的回退与变异专门钉它。
+3. 工具名聚合 0.68 s，必须缓存且懒加载。
+
+### 做了什么
+
+`combo.js`：`CD.comboMath`（node --test 7 组）+ `CD.combo.mount`（搜索框 / listbox / ↑↓ Home End Enter Esc Tab / 外点 / 右缘翻转 / token）。
+过滤栏五个宿主（新增项目），`FILTER_COMBOS` 选项表；问一问范围覆盖全部项目；设置页枚举经 hidden input 复用原收集逻辑；
+`CD.projectShort` / `CD.projectOptions` 一处实现。后端 `GET /api/tools` + 10 分钟缓存。e2e 守卫一条，变异 9/9 咬。
+
+### 下一步
+
+- [ ] 工具名列表若以后要跟着扫描实时变，把缓存改成扫描完成时失效（现在是 10 分钟 TTL）
+- [ ] `blocks(tool_name)` 要不要建索引：只有这一个查询用，且已缓存，暂不建
+
+
+## R34 readme-screenshot-pipeline — 截图成了构建产物：脚本拍、清单记版本、发布前查过期
+
+### 发现
+
+1. 14 张图全是 2026-08-05 的（R17 之前），之后 16 轮没跟上；R31、R32 各记了一条「下次一起换」，没人来。
+   根因是重拍是手工活、过期没信号、脱敏靠肉眼——三件事都没有机制。
+2. 演示 HOME 是 8 月 5 日生成的，比生成器的标记文件护栏还早，拍摄脚本按规矩拒绝它；整套按脚本头部写的步骤
+   重造了一遍（固定种子，内容相同；摘要由 Ollama 重生成，57 条约 30 s）。
+3. 脱敏关卡第一轮真跑就拦下设置页：演示配置里 `backup.restic_path` 写的是真实家目录下的路径，在视口下方。
+   旧图没露只是因为没滚到——`innerText` 扫全页，不只扫视口，这一点现在是有意为之。
+4. 还原会话文件后，worker 要到下一轮 `EnqueueMissing` 才补队；等「队列为空」在补队前恒为真，于是第一版脚本
+   在两条摘要还没生成时就宣布「已补齐」。改成等「没有缺摘要的会话且队列空」，拍前也先等这个。
+5. 公开仓停在 R25（68 个提交，私有仓 177）——只推图不推代码，公开 README 会描述公开代码里没有的功能。
+6. 问一问那张的两个坑：① 7B 模型偶尔把工具调用当正文吐出来（`search_sessions {…}`），画面上没有检索轮次也没引用会话，
+   加了「至少一轮检索且正文引用会话」的合格判据，不合格重问（最多 3 次，实测第 2 次就过）；② 同一台 Chrome 上两次
+   `Runtime.evaluate` 连续超时整整 180 s，MCP 走同一浏览器复现不了，**原因没查清**——驱动改为超时即换 tab 重拍这一张一次。
+7. 发布脚本第一次真跑就在第 5 关停下：R26–R33 的改动里有 12 处真实标识（三个真实项目名散在 BACKLOG / REPLAN /
+   architecture / `timeline.go` 注释 / 变异用例说明 / combo 测试夹具，外加评估脚本归档里的会话 scratchpad 绝对路径）。
+   公开仓停在 R25 的这两个月里它们从没过过关卡。全部换成中性占位。顺带发现界面摘要把 `static/` 下的测试文件也算了进去，
+   改一个夹具名就「截图过期」——摘要现在排除 `*_test.mjs` / `*_test.go`。
+
+### 做了什么
+
+`scripts/screenshots.mjs`（纯函数 node --test 7 组 + CDP 驱动 + 两个状态包装）、`scripts/ui-digest.sh`、
+`scripts/sync-public.sh`（七道关卡）、`docs/images/manifest.json`、`test/e2e/screenshots_test.go` 两条、变异 6 条。
+14 张全部重拍，README 补一句「截图也是脚本拍的」，决策 50。公开仓同步到含本轮的 HEAD。
+
+### 下一步
+
+- [ ] `ui-digest.sh` 不覆盖 `.go` 里的页面文案（备份页、进度页的句子）：改那些句子时要记得重拍，或把 `internal/httpapi` 也算进摘要
+- [ ] 演示语料只有 claude / codex 两种来源，来源下拉里 grok / cursor 筛出来是空的；要展示它们得给生成器加两种来源
+- [ ] `withDeletedSessions` 一轮约 75 s（两次 30 s 重扫 + 补摘要）；嫌慢可以把演示配置的 `scan.interval_sec` 调到 5

@@ -30,7 +30,7 @@ type Cursor struct {
 
 // Parser 是一种 agent 工具的会话格式解析器。
 type Parser interface {
-	// Name 是来源标识，写进 sessions.source（claude / codex）。
+	// Name 是来源标识，写进 sessions.source（claude / codex / grok / cursor）。
 	Name() string
 
 	// Roots 是该工具存放会话记录的根目录（绝对路径）。
@@ -46,8 +46,9 @@ type Parser interface {
 	// 调用方负责把 r 定位到 start.Offset。
 	// 单行解析失败只跳过该行并累计到 Cursor.Skipped，不得中断整个文件。
 	//
-	// path 是这个文件的绝对路径。**Grok 需要它**：它的会话标题在同目录的
-	// summary.json 里，而 Parse 只拿得到 io.Reader，不知道自己在读哪个文件。
+	// path 是这个文件的绝对路径。Grok 的标题在同目录 summary.json，
+	// Cursor 的标题在 ~/.cursor/chats/<hash>/<uuid>/meta.json。
+	// Parse 只拿得到 io.Reader，不知道自己在读哪个文件。
 	//
 	// 为什么不是「Meta 先把路径存起来、Parse 再读」：那依赖「Meta 先跑、Parse
 	// 后跑、且是同一个文件」这个**接口从没承诺过**的调用顺序。扫描器哪天改成

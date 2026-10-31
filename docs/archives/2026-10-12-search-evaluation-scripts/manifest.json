@@ -1,0 +1,44 @@
+{
+  "archivedAt": "2026-10-12",
+  "sourceDirectory": "<会话 scratchpad>",
+  "sourceSession": "6d29203f-a043-4a86-a474-8a6fc4a7fc6c",
+  "originalsRetained": true,
+  "privateDataIncluded": false,
+  "files": [
+    {
+      "file": "gap_build.py",
+      "bytes": 4994,
+      "sha256": "f242469f5ae7186a5fc2269cc3d299e9fd2d83eeb6d9b89eb81d2388869bf9e0"
+    },
+    {
+      "file": "gap_corpus.py",
+      "bytes": 2389,
+      "sha256": "097605383a129ab0da74b0c61f29a3ba60e6a8de9984ef4fd7e5279d1e7031d8"
+    },
+    {
+      "file": "gap_embed.py",
+      "bytes": 2017,
+      "sha256": "494679b18ae6157bd695010ab5b0706db902218b8b202311ccde517e81d284f8"
+    },
+    {
+      "file": "gap_sparse.py",
+      "bytes": 3748,
+      "sha256": "481794b6e34ada3273f61182dd59db5d1ed34f86345c011806e697ffe244bc8d"
+    },
+    {
+      "file": "gap_dense.py",
+      "bytes": 1871,
+      "sha256": "24da10bc010fdde90f2eb150c917b998b25e9e32b9de2936260a58db19aeb4cb"
+    },
+    {
+      "file": "tokprobe.py",
+      "bytes": 2578,
+      "sha256": "303cecb494ae0a0a02ca6e8153b3bbbf0336d73aea558a86e9dc7077eaf2da9c"
+    },
+    {
+      "file": "perf.py",
+      "bytes": 1000,
+      "sha256": "0e0f080b83f8251b218449c093b0b5edab331890871e6adc5fee5aa595998015"
+    }
+  ]
+}

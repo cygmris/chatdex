@@ -279,3 +279,39 @@ func TestCoverageWithholdsLostUntilIndexReady(t *testing.T) {
 			ready.LostTotal)
 	}
 }
+
+// 索引快照（R27）是仓库里一种新的快照：只含 snapshot/index.db，不含任何会话文件。
+// 并集索引照常把它扫进去，但它只会多出**那一个**路径，会话文件的集合一个不多一个不少——
+// 覆盖率数字因此不变。判据是路径集合精确相等，不是「keep/gone 还在」（那对多出一堆噪声也绿）。
+func TestSeenScannerIgnoresIndexSnapshotForCoverage(t *testing.T) {
+	r, keep, gone := seedVanished(t)
+	ctx := context.Background()
+
+	cfg := r.cfg()
+	cfg.IndexSnapshot = true
+	cfg.IndexSnapshotDir = filepath.Join(filepath.Dir(cfg.Repo), "snapshot")
+	r.Cfg = func() Config { return cfg }
+	r.IndexSnapshot = func(_ context.Context, dst string) error {
+		return os.WriteFile(dst, []byte("sqlite"), 0o600)
+	}
+	if _, err := r.Backup(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if li := r.LastIndex(); li == nil || li.Error != "" {
+		t.Fatalf("索引快照应成功，实际 %+v", li)
+	}
+
+	store := newMemSeen()
+	if err := NewSeenScanner(r, store, nil).Scan(ctx); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]bool{keep: true, gone: true, filepath.Join(cfg.IndexSnapshotDir, indexSnapshotName): true}
+	if len(store.paths) != len(want) {
+		t.Fatalf("并集应恰好 %d 个路径（两个会话文件 + 一个索引快照），实际 %d：%v", len(want), len(store.paths), store.paths)
+	}
+	for p := range want {
+		if !store.paths[p] {
+			t.Errorf("并集里缺 %s", p)
+		}
+	}
+}

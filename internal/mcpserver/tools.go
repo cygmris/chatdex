@@ -28,7 +28,7 @@ type SearchArgs struct {
 	Query    string `json:"query" jsonschema:"关键词，中英皆可；多个词以空格分隔，按 AND 组合"`
 	Kind     string `json:"kind,omitempty" jsonschema:"限定内容类型：user/assistant/reasoning/tool_use/tool_result/summary。reasoning 目前只有 Grok 有"`
 	ToolName string `json:"tool_name,omitempty" jsonschema:"限定工具名，如 Bash"`
-	Source   string `json:"source,omitempty" jsonschema:"限定来源：claude / codex / grok"`
+	Source   string `json:"source,omitempty" jsonschema:"限定来源：claude / codex / grok / cursor"`
 	Project  string `json:"project,omitempty" jsonschema:"限定项目路径（含其子目录）"`
 	From     int64  `json:"from,omitempty" jsonschema:"起始时间，unix 秒"`
 	To       int64  `json:"to,omitempty" jsonschema:"结束时间，unix 秒"`
@@ -40,12 +40,14 @@ type SessionBrief struct {
 	Source      string `json:"source"`
 	ProjectPath string `json:"project_path"`
 	FilePath    string `json:"file_path"` // 原始文件绝对路径，便于用别的工具打开
-	StartedAt   int64  `json:"started_at"`
-	EndedAt     int64  `json:"ended_at"`
-	MsgCount    int    `json:"msg_count"`
-	Summary     string `json:"summary,omitempty"`
-	Hits        int    `json:"hits"`
-	BestSeq     int    `json:"best_seq"` // 最佳命中所在序号，可直接喂给 get_session
+	// Alive=false：file_path 已不在磁盘上（源文件被 CLI 清理），正文仍在索引里，用 get_session 读。
+	Alive     bool   `json:"alive"`
+	StartedAt int64  `json:"started_at"`
+	EndedAt   int64  `json:"ended_at"`
+	MsgCount  int    `json:"msg_count"`
+	Summary   string `json:"summary,omitempty"`
+	Hits      int    `json:"hits"`
+	BestSeq   int    `json:"best_seq"` // 最佳命中所在序号，可直接喂给 get_session
 	// LastSeq 只在**它比 BestSeq 更靠后**时出现，含义是「后面还有对同一关键词的讨论」。
 	// ⚠️ 它不是「前面那处已作废」的信号：实测最佳块位置中位 56%、前后均匀，
 	// 「相关度偏向早期的错误版本」这条论据已被同批数据否掉（见 BACKLOG later-hit-marker）。
@@ -53,6 +55,8 @@ type SessionBrief struct {
 	BestKind string `json:"best_kind,omitempty"`
 	BestTool string `json:"best_tool,omitempty"`
 	Snippet  string `json:"snippet"`
+	// ViaSynonym：最佳命中块只用原词匹配不上，至少有一个词是靠近义词补上的
+	ViaSynonym bool `json:"via_synonym,omitempty"`
 }
 
 // laterSeq 只在最后一次命中确实晚于最佳命中时返回它。
@@ -65,9 +69,10 @@ func laterSeq(best, last int) int {
 }
 
 type SearchOutput struct {
-	Sessions []SessionBrief `json:"sessions"`
-	NoMatch  bool           `json:"no_match"`
-	Note     string         `json:"note,omitempty"`
+	Sessions []SessionBrief     `json:"sessions"`
+	NoMatch  bool               `json:"no_match"`
+	Expanded []search.Expansion `json:"expanded,omitempty"`
+	Note     string             `json:"note,omitempty"`
 }
 
 func (t *Tools) SearchSessions(a SearchArgs) (SearchOutput, error) {
@@ -87,18 +92,19 @@ func (t *Tools) SearchSessions(a SearchArgs) (SearchOutput, error) {
 		return SearchOutput{}, err
 	}
 
-	out := SearchOutput{NoMatch: res.NoMatch}
+	out := SearchOutput{NoMatch: res.NoMatch, Expanded: res.Expanded}
 	for _, s := range res.Sessions {
 		out.Sessions = append(out.Sessions, SessionBrief{
-			SessionID: s.ID, Source: s.Source, ProjectPath: s.ProjectPath, FilePath: s.FilePath,
+			SessionID: s.ID, Source: s.Source, ProjectPath: s.ProjectPath, FilePath: s.FilePath, Alive: s.Alive,
 			StartedAt: s.StartedAt, EndedAt: s.EndedAt, MsgCount: s.MsgCount, Summary: s.Summary,
 			Hits: s.Hits, BestSeq: s.BestSeq, BestKind: s.BestKind, BestTool: s.BestTool,
-			LastSeq: laterSeq(s.BestSeq, s.LastSeq),
-			Snippet: clip(search.StripAll(s.Snippet), snippetChars),
+			LastSeq:    laterSeq(s.BestSeq, s.LastSeq),
+			Snippet:    clip(search.StripAll(s.Snippet), snippetChars),
+			ViaSynonym: s.ViaSynonym,
 		})
 	}
 	if res.NoMatch {
-		out.Note = "无命中。这是字面匹配的结果，不会返回近似项——换个说法或放宽过滤条件再试。"
+		out.Note = "无命中（已含近义词表扩展）。换个说法或放宽过滤条件再试。"
 	}
 	return out, nil
 }
@@ -109,6 +115,8 @@ type GetSessionArgs struct {
 	SessionID int64 `json:"session_id" jsonschema:"会话 id，取自 search_sessions 的结果"`
 	FromSeq   int   `json:"from_seq,omitempty" jsonschema:"从第几条开始读，可用 search 返回的 best_seq"`
 	Limit     int   `json:"limit,omitempty" jsonschema:"读取条数，最多 50"`
+	// 长会话里工具调用与结果占八成；只读对话时省大量 token。
+	Kinds string `json:"kinds,omitempty" jsonschema:"只读这些类型，逗号分隔，如 user,assistant；省略 = 全部。可选值 user/assistant/reasoning/tool_use/tool_result"`
 }
 
 type MessageBrief struct {
@@ -124,6 +132,7 @@ type SessionOutput struct {
 	SessionID   int64          `json:"session_id"`
 	ProjectPath string         `json:"project_path"`
 	FilePath    string         `json:"file_path"`
+	Alive       bool           `json:"alive"` // false = file_path 已不存在；本输出的正文来自索引，不受影响
 	Total       int            `json:"total"`
 	Summary     string         `json:"summary,omitempty"`
 	Messages    []MessageBrief `json:"messages"`
@@ -135,13 +144,19 @@ func (t *Tools) GetSession(a GetSessionArgs) (SessionOutput, error) {
 	if limit <= 0 || limit > maxSessionLimit {
 		limit = maxSessionLimit
 	}
-	v, err := t.Engine.GetSession(a.SessionID, a.FromSeq, limit)
+	q := search.SessionQuery{Limit: limit, Kinds: search.ParseKinds(a.Kinds)}
+	if a.FromSeq > 0 {
+		// from_seq 是「从这条起读」：带 kinds 时按它在可见集里的位置取偏移
+		at := a.FromSeq
+		q.AtSeq = &at
+	}
+	v, err := t.Engine.GetSession(a.SessionID, q)
 	if err != nil {
 		return SessionOutput{}, err
 	}
 
 	out := SessionOutput{
-		SessionID: v.ID, ProjectPath: v.ProjectPath, FilePath: v.FilePath,
+		SessionID: v.ID, ProjectPath: v.ProjectPath, FilePath: v.FilePath, Alive: v.Alive,
 		Total: v.Total, Summary: v.Summary,
 	}
 	budget := sessionBudget

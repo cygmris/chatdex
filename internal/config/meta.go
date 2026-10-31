@@ -64,7 +64,7 @@ func Fields() []FieldMeta {
 		{Key: "scan.interval_sec", Label: "扫描间隔（秒）", Kind: "int", Hot: true, Group: "索引",
 			Help: "多久扫一次会话目录找新内容", Min: 5, Max: 3600},
 		{Key: "scan.roots", Label: "扫描根目录", Kind: "paths", Hot: false, Optional: true, Group: "索引",
-			Help: "空 = 扫全部解析器默认目录（~/.claude/projects、~/.codex/sessions、~/.grok/sessions）。" +
+			Help: "空 = 扫全部解析器默认目录（~/.claude/projects、~/.codex/sessions、~/.grok/sessions、~/.cursor/projects）。" +
 				"非空则只扫列出的真实目录，不在范围内的已索引会话会被标为失效。" +
 				"必须是绝对路径。filepath.WalkDir 不跟进目录符号链接，不要把 symlink 当缩小范围的办法。",
 			Note: restartHint},
@@ -88,8 +88,13 @@ func Fields() []FieldMeta {
 				"systemd --user 与 macOS launchd 起的服务其 PATH 都很短（launchd 默认只有 /usr/bin:/bin:/usr/sbin:/sbin）。"},
 		{Key: "backup.sources", Label: "备份哪些目录", Kind: "sources", Hot: true, Optional: true, Group: "备份",
 			Help: "勾选要备份的目录，可只备其中一个也可全部。默认列出会话目录，也可加任意其它路径。"},
+		{Key: "backup.exclude_larger_than", Label: "单文件大小上限", Kind: "string", Hot: true, Optional: true, Group: "备份",
+			Help: "restic 语法，如 1M。超过这个大小的单个文件不进备份。留空表示不限。"},
 		{Key: "backup.after_scan", Label: "扫描后顺手备一次", Kind: "bool", Hot: true, Group: "备份",
 			Help: "实测无变化时 restic 只需 767 ms 且仓库零增长，所以这个开关很便宜。"},
+		{Key: "backup.index_snapshot", Label: "把索引库自身也备进去", Kind: "bool", Hot: true, Group: "备份",
+			Help: "每天最多一次：用 SQLite 在线备份生成一致快照（<索引库目录>/snapshot/index.db），单独一次 restic backup 收进同一个仓库，" +
+				"不受上面的大小上限影响，异地镜像自然跟上。索引库里有源文件已消失会话的正文与全部摘要，那些只存在于它里面。"},
 		{Key: "backup.mirror.repo", Label: "异地仓地址", Kind: "string", Hot: true, Optional: true, Group: "备份",
 			Help: "把本地仓再镜像一份到 S3 / R2，形如 s3:https://<账号>.r2.cloudflarestorage.com/<桶>/<前缀>。" +
 				"留空 = 没有异地副本：盘坏了能救，机器整台没了就全没了。"},
@@ -163,8 +168,12 @@ func (c Config) Get(key string) any {
 		return c.Backup.ResticPath
 	case "backup.sources":
 		return c.Backup.Sources
+	case "backup.exclude_larger_than":
+		return c.Backup.ExcludeLargerThan
 	case "backup.after_scan":
 		return c.Backup.AfterScan
+	case "backup.index_snapshot":
+		return c.Backup.IndexSnapshot
 	case "backup.mirror.repo":
 		return c.Backup.Mirror.Repo
 	case "backup.mirror.env_file":

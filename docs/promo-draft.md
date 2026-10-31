@@ -103,5 +103,5 @@ indistinguishable from "ran, called, used, and nothing happened."
 ## 发之前
 
 - [ ] 数字重量一遍（这份稿子已经因为「用旧数」被返工过一次）
-- [ ] 截图是不是当前界面（R18 之后加了时间线分页、R22 加了「已截断」可点）
+- [x] 截图是不是当前界面（R34 起由 scripts/screenshots.mjs 重拍，manifest.json 记界面摘要；发布脚本会拦过期）
 - [ ] V2EX / HN 的自我推广版规各自确认

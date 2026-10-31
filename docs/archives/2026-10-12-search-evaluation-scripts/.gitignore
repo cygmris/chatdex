@@ -1,0 +1,11 @@
+*
+!.gitignore
+!README.md
+!manifest.json
+!gap_build.py
+!gap_corpus.py
+!gap_embed.py
+!gap_sparse.py
+!gap_dense.py
+!tokprobe.py
+!perf.py

@@ -10,6 +10,8 @@ import (
 	"github.com/cygmris/chatdex/internal/backup"
 	"io"
 	"net/http"
+	"sync"
+	"time"
 
 	"github.com/cygmris/chatdex/internal/chat"
 
@@ -37,6 +39,7 @@ type Backuper interface {
 		seenInAny func([]string) (map[string]bool, error), progress backup.SeenProgress) (backup.Coverage, error)
 	Fetch(ctx context.Context, path string) (io.ReadCloser, error)
 	LastAuto() *backup.AutoResult
+	LastIndex() *backup.AutoResult
 	Init(ctx context.Context) error
 }
 
@@ -61,6 +64,13 @@ type Server struct {
 	// Reg 用于解析从备份里取回的原件。与索引用的是同一套解析器——
 	// 备份里的原件和源目录里的文件是同一种东西，两套解析必然漂移。
 	Reg *parser.Registry
+	// Now 可为 nil（取 time.Now）；测试用它拨快时钟验缓存过期。
+	Now func() time.Time
+
+	// 工具名列表的缓存：全库聚合实测 0.68 s，不能每次请求都算。
+	toolsMu sync.Mutex
+	toolsAt time.Time
+	tools   []search.ToolStat
 	// Mirror 报告异地副本落后多少，可为 nil（与 Backup 同生同灭）。
 	Mirror *backup.Mirror
 	// SeenScanner 维护「曾出现在任一快照里」的并集索引，可为 nil（与 Backup 同生同灭）。
@@ -86,6 +96,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/session/{id}/archived", s.handleArchived)
 	mux.HandleFunc("GET /api/timeline", s.handleTimeline)
 	mux.HandleFunc("GET /api/projects", s.handleProjects)
+	mux.HandleFunc("GET /api/tools", s.handleTools)
 	mux.HandleFunc("GET /api/stats", s.handleStats)
 	mux.HandleFunc("GET /api/health", s.handleHealth)
 	mux.HandleFunc("POST /api/summary/pause", s.handleSummaryPause)

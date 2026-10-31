@@ -29,9 +29,10 @@ func (s *Server) handleBackupStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, struct {
 		backup.Status
-		LastAuto *backup.AutoResult   `json:"last_auto,omitempty"`
-		Mirror   *backup.MirrorStatus `json:"mirror,omitempty"`
-	}{st, s.Backup.LastAuto(), mirror})
+		LastAuto  *backup.AutoResult   `json:"last_auto,omitempty"`
+		LastIndex *backup.AutoResult   `json:"last_index,omitempty"`
+		Mirror    *backup.MirrorStatus `json:"mirror,omitempty"`
+	}{st, s.Backup.LastAuto(), s.Backup.LastIndex(), mirror})
 }
 
 func (s *Server) handleMirrorSync(w http.ResponseWriter, r *http.Request) {

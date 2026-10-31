@@ -33,6 +33,20 @@ import (
 // probeTimeout 是探测类命令的超时。探测要快——它挡在界面渲染前面。
 const probeTimeout = 5 * time.Second
 
+// 索引库快照每天最多一次：每次备份都做等于每半小时读一遍 4 GB 的库。
+const indexSnapshotGap = 24 * time.Hour
+
+// 快照失败后隔一小时再试，而不是下一次备份（30 分钟）就试：磁盘满这类持续性
+// 失败下，每次都要先写几 GB 再发现写不下。也不是等满 24 小时：瞬时失败不该
+// 让人白丢一天。
+const indexRetryGap = time.Hour
+
+// indexTag 标在索引快照上：恢复时 --tag 直接定位，列表里也与会话快照一眼分开。
+const indexTag = "chatdex-index"
+
+// indexSnapshotName 是快照目录里的文件名；.tmp 后缀的是还没写完的。
+const indexSnapshotName = "index.db"
+
 // Source 是一个备份源。
 //
 // 做成列表而不是单个路径：restic 一条命令能备多个路径，
@@ -53,6 +67,17 @@ type Config struct {
 	PasswordFile string
 	ResticPath   string // 空 = 从 PATH 找
 	Sources      []Source
+	// ExcludeLargerThan 是单文件大小上限（restic 的 --exclude-larger-than 语法，
+	// 如 "1M"）；空 = 不限。
+	//
+	// 为什么按**大小**而不是按目录排除：任务目录（如 ~/.claude/jobs）里
+	// 记录与中间件混在一处——实测 763 个文件中 744 个（97.5%）只占 5.5 MB，
+	// 全是手写的 .sql/.sh/.py/.mjs，丢了要重写；而 12 个大件吃掉 216 MB，
+	// 都是可再生的数据集与下载包。按目录排会把那 744 个一起丢掉。
+	ExcludeLargerThan string
+	// IndexSnapshot 开关与快照目录（由 db_path 派生，不做成配置项）。
+	IndexSnapshot    bool
+	IndexSnapshotDir string
 	// Env 是额外的环境变量（KEY=VALUE），给异地仓传 S3 凭据用。
 	//
 	// 凭据走这里而不是 Config 的具名字段：它们只在异地那条路径上有意义，
@@ -64,9 +89,15 @@ type Config struct {
 type Runner struct {
 	Cfg func() Config // 热取，与 summary.Worker.Live 同一手法
 
+	// IndexSnapshot 把索引库的一致快照写到 dst；上层注入 VACUUM INTO，nil = 本进程没有库句柄。
+	// 以函数注入而不是 import index 包：备份包在依赖图里必须位于索引包之下。
+	IndexSnapshot func(ctx context.Context, dst string) error
+
 	// 自动备份的结果记在内存里（不建表），由扫描循环写、API 读，所以要锁。
-	mu       sync.Mutex
-	lastAuto *AutoResult
+	mu           sync.Mutex
+	lastAuto     *AutoResult
+	lastIndex    time.Time   // 上一次索引快照的时刻（成功）或上一次失败 + 回退后的等效时刻
+	lastIndexRes *AutoResult // 从没跑过则 nil
 }
 
 func (r *Runner) cfg() Config {
@@ -244,7 +275,11 @@ func (r *Runner) Backup(ctx context.Context) (Result, error) {
 		return Result{}, fmt.Errorf("备份源 %s 包含了仓库自身（%s），会无限膨胀", bad, c.Repo)
 	}
 
-	args := append([]string{"backup", "--json"}, srcs...)
+	args := []string{"backup", "--json"}
+	if s := strings.TrimSpace(c.ExcludeLargerThan); s != "" {
+		args = append(args, "--exclude-larger-than", s)
+	}
+	args = append(args, srcs...)
 	out, err := r.run(ctx, args...)
 
 	res, ok := parseSummary(out)
@@ -260,11 +295,97 @@ func (r *Runner) Backup(ctx context.Context) (Result, error) {
 		if isExitCode(err, resticPartial) || strings.Contains(err.Error(), "could not be read") {
 			res.Partial = true
 			res.Warning = err.Error()
-			return res, nil
+		} else {
+			return res, err
 		}
+	}
+	// 主备份跑完（含部分完成）之后才做索引快照：它是附属品，主备份没成就没有它的位置；
+	// 它自己失败也不改变上面已经拿到的结果（需求 1.3）——失败只进 LastIndex 给界面看。
+	r.maybeSnapshotIndex(ctx)
+	return res, nil
+}
+
+// maybeSnapshotIndex 在到期时做一次索引快照，结果记进 lastIndexRes。
+func (r *Runner) maybeSnapshotIndex(ctx context.Context) {
+	c := r.cfg()
+	if !c.IndexSnapshot {
+		return // 关着是明确的选择，不记状态、不算异常
+	}
+	r.mu.Lock()
+	due := time.Since(r.lastIndex) >= indexSnapshotGap
+	r.mu.Unlock()
+	if !due {
+		return
+	}
+	res, err := r.snapshotIndex(ctx, c)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	a := &AutoResult{At: time.Now(), Result: res}
+	if err != nil {
+		a.Error = err.Error()
+		r.lastIndex = time.Now().Add(-indexSnapshotGap + indexRetryGap)
+	} else {
+		r.lastIndex = time.Now()
+	}
+	r.lastIndexRes = a
+}
+
+// snapshotIndex 生成一致快照并单独跑一次 restic 备份。
+//
+// 单独一次而不是并进主备份：主备份带 --exclude-larger-than，那条上限对会话目录是对的
+// （挡掉可再生的数据集），对 4 GB 的库就是静默丢弃——restic 的大小过滤是全局的，
+// 没有按源豁免的办法。分开跑，主备份的过滤一个字不改。
+func (r *Runner) snapshotIndex(ctx context.Context, c Config) (Result, error) {
+	if r.IndexSnapshot == nil {
+		return Result{}, errors.New("本进程没有索引库句柄，做不了快照")
+	}
+	dir := strings.TrimSpace(c.IndexSnapshotDir)
+	if dir == "" {
+		return Result{}, errors.New("没有快照目录")
+	}
+	if bad := repoInsideSources(c.Repo, []string{dir}); bad != "" {
+		return Result{}, fmt.Errorf("快照目录 %s 包含了仓库自身（%s），会无限膨胀", dir, c.Repo)
+	}
+	if src := repoInsideSources(dir, c.EnabledSources()); src != "" {
+		// 在源之下的话主备份会再收一遍、又被大小上限过滤——两边都"成功"，却什么都没备
+		return Result{}, fmt.Errorf("快照目录 %s 在备份源 %s 之下", dir, src)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return Result{}, err
+	}
+	final := filepath.Join(dir, indexSnapshotName)
+	tmp := final + ".tmp"
+	_ = os.Remove(tmp) // 上次写到一半的
+	if err := r.IndexSnapshot(ctx, tmp); err != nil {
+		_ = os.Remove(tmp)
+		return Result{}, fmt.Errorf("生成快照: %w", err)
+	}
+	// 先写 .tmp 再改名：VACUUM INTO 要求目标不存在，且半截文件不能被下一次备份当成完整快照
+	if err := os.Chmod(tmp, 0o600); err != nil {
+		return Result{}, err
+	}
+	if err := os.Rename(tmp, final); err != nil {
+		return Result{}, err
+	}
+	out, err := r.run(ctx, "backup", "--json", "--tag", indexTag, dir)
+	res, ok := parseSummary(out)
+	if !ok {
+		if err != nil {
+			return Result{}, err
+		}
+		return Result{}, fmt.Errorf("restic 没有给出备份摘要")
+	}
+	if err != nil && !isExitCode(err, resticPartial) {
 		return res, err
 	}
 	return res, nil
+}
+
+// LastIndex 返回最后一次索引快照的结果；从没跑过则为 nil。
+func (r *Runner) LastIndex() *AutoResult {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.lastIndexRes
 }
 
 // repoInsideSources 返回第一个包含了仓库路径的源；没有则返回空。
