@@ -97,6 +97,7 @@ go build -ldflags "-X github.com/cygmris/chatdex/internal/version.Version=0.2.0 
 ```
 
 也可以下 [Releases](https://github.com/cygmris/chatdex/releases/latest) 的预编译包（linux / macOS × amd64 / arm64）。
+维护者怎么出这些包见 [release.md](release.md)。
 
 ## 首次安装
 
