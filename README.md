@@ -126,11 +126,6 @@ agent 读结论不必付那份 token。
 
 ## 界面
 
-> 所有截图用的都是**造出来的演示数据**——57 个虚构会话、5 个虚构项目，不是任何人的真实会话。
-> 生成器就在仓库里：[`scripts/gen-demo-corpus.py`](scripts/gen-demo-corpus.py)，这句话可以自己验证。
-> 截图也是脚本拍的：[`scripts/screenshots.mjs`](scripts/screenshots.mjs) 从这份语料起一个实例拍全套，每张落盘前先扫画面上的文字；
-> [`docs/images/manifest.json`](docs/images/manifest.json) 记着这套图对应界面的哪个版本。
-
 ### 检索：摘要是主标题，片段是证据
 
 每条结果以会话摘要打头，一眼能看出是不是你要的那个；下面的片段说明它**为什么**匹配。

@@ -136,10 +136,6 @@ Three tools: `search_sessions`, `get_session`, `list_projects`.
 
 ## Screenshots
 
-> All screenshots use **synthetic demo data** — 57 fabricated sessions across 5 fictional projects.
-> The generator is in the repo: [`scripts/gen-demo-corpus.py`](scripts/gen-demo-corpus.py), so you can verify that claim.
-> Not anyone's real transcripts.
-
 ### Search: summary as the headline, snippet as evidence
 
 Every result leads with the session summary, so you can tell at a glance which one you want.
